@@ -1,0 +1,8 @@
+MetaTrader5
+python-dotenv
+requests
+pandas
+numpy
+TA-Lib
+pydantic
+loguru
