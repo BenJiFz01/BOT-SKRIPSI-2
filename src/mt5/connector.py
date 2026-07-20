@@ -1,28 +1,49 @@
-import MetaTrader5 as mt5
+"""
+connector.py
+============
+Koneksi ke terminal MetaTrader 5.
+
+Sesuaikan TERMINAL_PATH dengan lokasi instalasi MT5 di komputer Anda.
+"""
+from __future__ import annotations
+
 import os
 
-TERMINAL_PATH = r"C:\Program Files\MetaTrader 5\terminal64.exe"  # sesuaikan
+import MetaTrader5 as mt5
 
-def shutdown():
+
+TERMINAL_PATH = r"C:\Program Files\MetaTrader 5\terminal64.exe"
+
+
+def connect(login: int, password: str, server: str):
+    """
+    Inisialisasi dan login ke MetaTrader 5.
+
+    Returns:
+        AccountInfo namedtuple dari mt5.account_info().
+
+    Raises:
+        RuntimeError jika terminal tidak ditemukan, gagal initialize, atau login gagal.
+    """
+    if not os.path.isfile(TERMINAL_PATH):
+        raise RuntimeError(f"MT5 terminal tidak ditemukan: {TERMINAL_PATH}")
+
+    if not mt5.initialize(path=TERMINAL_PATH, portable=True):
+        raise RuntimeError(f"MT5 initialize gagal: {mt5.last_error()}")
+
+    if not mt5.login(login=login, password=password, server=server):
+        raise RuntimeError(f"MT5 login gagal: {mt5.last_error()}")
+
+    info = mt5.account_info()
+    if info is None:
+        raise RuntimeError(f"MT5 account_info gagal: {mt5.last_error()}")
+
+    return info
+
+
+def shutdown() -> None:
+    """Tutup koneksi MT5 dengan aman."""
     try:
         mt5.shutdown()
     except Exception:
         pass
-
-def connect(login: int, password: str, server: str):
-    if not os.path.isfile(TERMINAL_PATH):
-        raise RuntimeError(f"MT5 terminal not found: {TERMINAL_PATH}")
-
-    # 1) init terminal dulu TANPA login
-    if not mt5.initialize(path=TERMINAL_PATH, portable=True):
-        raise RuntimeError(f"MT5 initialize failed: {mt5.last_error()}")
-
-    # 2) login TERPISAH
-    if not mt5.login(login=login, password=password, server=server):
-        raise RuntimeError(f"MT5 login failed: {mt5.last_error()}")
-
-    info = mt5.account_info()
-    if info is None:
-        raise RuntimeError(f"MT5 account_info failed: {mt5.last_error()}")
-
-    return info

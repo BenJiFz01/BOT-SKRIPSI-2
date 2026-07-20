@@ -1,43 +1,49 @@
+"""
+logger.py
+=========
+Setup loguru untuk logging ke konsol dan file.
+"""
 from __future__ import annotations
 
 import sys
 from pathlib import Path
+
 from loguru import logger
 
 
 def setup_logger() -> None:
-
-    # pastikan folder logs ada
+    """
+    Inisialisasi logger:
+    - Konsol: INFO ke atas, format berwarna.
+    - File: DEBUG ke atas, rotasi 5 MB, retensi 7 hari.
+    """
     Path("logs").mkdir(parents=True, exist_ok=True)
-
-    # hapus default handler loguru
     logger.remove()
 
-    # ===== CONSOLE LOGGER =====
     logger.add(
         sys.stdout,
         level="INFO",
         format=(
-            "<green>{time:YYYY-MM-DD HH:mm:ss.SSS}</green> | "
+            "<green>{time:YYYY-MM-DD HH:mm:ss}</green> | "
             "<level>{level: <8}</level> | "
-            "<cyan>{module}</cyan>:<cyan>{function}</cyan>:<cyan>{line}</cyan> - "
+            "<cyan>{module}</cyan>:<cyan>{line}</cyan> - "
             "<level>{message}</level>"
         ),
     )
 
-    # ===== FILE LOGGER (ALL LEVELS) =====
     logger.add(
         "logs/app.log",
-        level="DEBUG",          # DEBUG, INFO, SUCCESS, WARNING, ERROR
+        level="DEBUG",
         rotation="5 MB",
         retention="7 days",
-        enqueue=True,           # 🔥 penting untuk Windows
+        enqueue=True,
         backtrace=True,
         diagnose=False,
+        encoding="utf-8",
         format=(
-            "{time:YYYY-MM-DD HH:mm:ss.SSS} | "
+            "{time:YYYY-MM-DD HH:mm:ss} | "
             "{level: <8} | "
-            "{module}:{function}:{line} - "
+            "{module}:{line} - "
             "{message}"
         ),
     )
