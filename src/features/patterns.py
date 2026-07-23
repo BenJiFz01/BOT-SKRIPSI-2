@@ -1,18 +1,4 @@
-"""
-patterns.py
-===========
-Deteksi 27 candlestick pattern via TA-Lib.
-
-Konvensi nilai TA-Lib:
-    +100 = pattern bullish terdeteksi
-    -100 = pattern bearish terdeteksi
-       0 = tidak ada pattern
-
-Kolom agregasi yang ditambahkan:
-    pattern_bull_count  jumlah pattern bullish aktif di candle ini
-    pattern_bear_count  jumlah pattern bearish aktif
-    pattern_score       bull_count - bear_count (positif = bull dominan)
-"""
+"""patterns.py — Deteksi 27 candlestick pattern via TA-Lib."""
 from __future__ import annotations
 
 import pandas as pd
@@ -20,62 +6,38 @@ import talib
 
 
 PATTERN_FUNCS = {
-    # Reversal dasar
-    "CDLENGULFING":     talib.CDLENGULFING,
-    "CDLHAMMER":        talib.CDLHAMMER,
+    "CDLENGULFING":      talib.CDLENGULFING,
+    "CDLHAMMER":         talib.CDLHAMMER,
     "CDLINVERTEDHAMMER": talib.CDLINVERTEDHAMMER,
-    "CDLSHOOTINGSTAR":  talib.CDLSHOOTINGSTAR,
-    "CDLHANGINGMAN":    talib.CDLHANGINGMAN,
-
-    # Star patterns
+    "CDLSHOOTINGSTAR":   talib.CDLSHOOTINGSTAR,
+    "CDLHANGINGMAN":     talib.CDLHANGINGMAN,
     "CDLMORNINGSTAR":     talib.CDLMORNINGSTAR,
     "CDLEVENINGSTAR":     talib.CDLEVENINGSTAR,
     "CDLMORNINGDOJISTAR": talib.CDLMORNINGDOJISTAR,
     "CDLEVENINGDOJISTAR": talib.CDLEVENINGDOJISTAR,
-
-    # Doji
-    "CDLDOJI":          talib.CDLDOJI,
+    "CDLDOJI":           talib.CDLDOJI,
     "CDLLONGLEGGEDDOJI": talib.CDLLONGLEGGEDDOJI,
-    "CDLDRAGONFLYDOJI": talib.CDLDRAGONFLYDOJI,
+    "CDLDRAGONFLYDOJI":  talib.CDLDRAGONFLYDOJI,
     "CDLGRAVESTONEDOJI": talib.CDLGRAVESTONEDOJI,
-
-    # Harami
-    "CDLHARAMI":      talib.CDLHARAMI,
-    "CDLHARAMICROSS": talib.CDLHARAMICROSS,
-
-    # Piercing / Dark Cloud
+    "CDLHARAMI":         talib.CDLHARAMI,
+    "CDLHARAMICROSS":    talib.CDLHARAMICROSS,
     "CDLPIERCING":       talib.CDLPIERCING,
     "CDLDARKCLOUDCOVER": talib.CDLDARKCLOUDCOVER,
-
-    # Soldiers / Crows
     "CDL3WHITESOLDIERS": talib.CDL3WHITESOLDIERS,
     "CDL3BLACKCROWS":    talib.CDL3BLACKCROWS,
-
-    # Multi-candle reversal
-    "CDL3INSIDE":     talib.CDL3INSIDE,
-    "CDL3OUTSIDE":    talib.CDL3OUTSIDE,
-    "CDL3LINESTRIKE": talib.CDL3LINESTRIKE,
-    "CDL2CROWS":      talib.CDL2CROWS,
-
-    # Kicking / Tasuki
-    "CDLKICKING":   talib.CDLKICKING,
-    "CDLTASUKIGAP": talib.CDLTASUKIGAP,
-
-    # Lainnya
-    "CDLMARUBOZU":    talib.CDLMARUBOZU,
-    "CDLSPINNINGTOP": talib.CDLSPINNINGTOP,
+    "CDL3INSIDE":        talib.CDL3INSIDE,
+    "CDL3OUTSIDE":       talib.CDL3OUTSIDE,
+    "CDL3LINESTRIKE":    talib.CDL3LINESTRIKE,
+    "CDL2CROWS":         talib.CDL2CROWS,
+    "CDLKICKING":        talib.CDLKICKING,
+    "CDLTASUKIGAP":      talib.CDLTASUKIGAP,
+    "CDLMARUBOZU":       talib.CDLMARUBOZU,
+    "CDLSPINNINGTOP":    talib.CDLSPINNINGTOP,
 }
 
 
 def add_patterns(df: pd.DataFrame) -> pd.DataFrame:
-    """
-    Tambahkan kolom candlestick pattern ke DataFrame.
-
-    Input DataFrame harus memiliki kolom: open, high, low, close.
-
-    Returns:
-        DataFrame baru dengan kolom pattern individual + agregasi.
-    """
+    """Tambahkan kolom candlestick pattern ke DataFrame. Returns DataFrame baru dengan kolom pattern + agregasi."""
     df = df.copy()
     o  = df["open"].astype(float).to_numpy()
     h  = df["high"].astype(float).to_numpy()

@@ -1,170 +1,130 @@
-"""
-templates.py
-============
-Format pesan sinyal untuk Telegram (HTML mode).
-
-Telegram mendukung emoji dan karakter unicode penuh.
-File ini hanya menghasilkan string -- tidak ada print() ke terminal,
-jadi tidak ada masalah encoding Windows.
-"""
+"""templates.py — Format pesan sinyal untuk Telegram (HTML mode)."""
 from __future__ import annotations
 
 from datetime import datetime, timezone, timedelta
-
 from src.models.signal import Signal
 
 
 _WIB = timezone(timedelta(hours=7))
 
 
-def _to_wib_str(iso_str: str) -> str:
-    """
-    Konversi ISO timestamp ke format 'YYYY-MM-DD HH:MM WIB'.
-    Fallback ke string asli jika parse gagal.
-    """
+def _to_wib(iso_str: str) -> str:
     try:
         dt = datetime.fromisoformat(iso_str)
         if dt.tzinfo is None:
             dt = dt.replace(tzinfo=timezone.utc)
-        dt_wib = dt.astimezone(_WIB)
-        return dt_wib.strftime("%Y-%m-%d %H:%M WIB")
+        return dt.astimezone(_WIB).strftime("%Y-%m-%d %H:%M WIB")
     except Exception:
         return iso_str
 
-
 def format_signal(sig: Signal, signal_id: str = "") -> str:
-    """
-    Format sinyal menjadi pesan HTML untuk Telegram.
+    """Format sinyal / setup plan menjadi pesan HTML untuk Telegram."""
+    is_setup   = getattr(sig, "is_setup_plan", False)
+    is_counter = getattr(sig, "signal_mode",   "trend") == "counter_trend"
+    trade_mode = getattr(sig, "trade_mode",    "intraday")
+    exec_tf    = getattr(sig, "exec_tf",       "")
+    dash = "\u2014"
 
-    Contoh output:
-        🟢 SINYAL BUY — XAUUSD
-        TF: H1  |  2026-07-20 14:00 WIB
-        ID: XAUUSD_H1_20260720_140000
+    # Header
+    if is_setup:
+        emoji      = "\U0001f4cb"
+        mode_label = f"SETUP {'BUY' if sig.direction == 'BUY' else 'SELL'}"
+        mode_note  = (
+            f"\U0001f4cc <i>Setup Plan {trade_mode.upper()} {dash} "
+            f"Antisipasi entry di <b>{exec_tf}</b>. "
+            f"Tunggu konfirmasi candle sebelum eksekusi.</i>"
+        )
+    elif is_counter:
+        emoji      = "\U0001f535" if sig.direction == "BUY" else "\U0001f7e0"
+        mode_label = "COUNTER BUY" if sig.direction == "BUY" else "COUNTER SELL"
+        mode_note  = "\u26a0\ufe0f <i>Counter Trend {dash} melawan bias HTF. Risiko lebih tinggi.</i>"
+    else:
+        emoji      = "\U0001f7e2" if sig.direction == "BUY" else "\U0001f534"
+        mode_label = sig.direction
+        mode_note  = None
 
-        📌 Entry Zone : 3310.00 – 3313.00
-        🛑 Stop Loss  : 3296.50  (ATR-based)
-        🎯 TP1        : 3329.00  (RR 1.5)
-        🎯 TP2        : 3341.00  (RR 2.5)
-        🎯 TP3        : 3357.00  (RR 4.0)
-        📊 RR         : 1.85R
+    trade_label = " \u26a1 SCALPING" if trade_mode == "scalping" else " \U0001f4c5 INTRADAY"
 
-        ── Analisis Teknikal ──────────────
-        📈 HTF Bias   : M15:BULL H4:BULL D1:BULL
-        🧩 Trigger    : 5/6 [EMA200+ EMA50+ ALIGN+ RSI+(42) MACD+ CDL+]
-        💎 Confluence : 5 [Pattern+ Fib+ SnR+ SnD+ Div+]
-        🕯 Pattern    : ENGULFING, MORNINGSTAR
-        📐 Fibonacci  : FIB_STRONG(fib_0.618=3311.50)
-        🔲 SnR        : S~3305.20 R~3340.00
-        📦 Zone       : SND_DEMAND(3308.50-3313.00)
-        🔀 Divergence : RSI_DIV
-        🕐 Sesi       : London
-        📉 ATR        : 12.5000
-
-        ⚠️ Rekomendasi manual — bukan auto-trade.
-    """
-    # Header emoji sesuai arah
-    emoji = "\U0001f7e2" if sig.direction == "BUY" else "\U0001f534"  # 🟢 / 🔴
-    dash  = "\u2014"  # —
-
-    # Timestamp ke WIB
-    time_str = _to_wib_str(sig.close_time)
-
-    # Entry zone
+    # Level harga
     if sig.entry_low is not None and sig.entry_high is not None:
-        entry_str = f"{sig.entry_low:.2f} \u2013 {sig.entry_high:.2f}"  # –
+        entry_str = f"{sig.entry_low:.2f} \u2013 {sig.entry_high:.2f}"
     else:
         entry_str = f"{sig.entry:.2f}"
 
-    # Harga
     sl_str  = f"{sig.sl:.2f}"  if sig.sl  is not None else "-"
     tp1_str = f"{sig.tp:.2f}"  if sig.tp  is not None else "-"
     tp2_str = f"{sig.tp2:.2f}" if sig.tp2 is not None else "-"
     tp3_str = f"{sig.tp3:.2f}" if sig.tp3 is not None else "-"
     rr_str  = f"{sig.rr:.2f}R" if sig.rr  is not None else "-"
-
     sl_label = "ATR-based" if sig.sl_method == "dynamic_atr" else "Fixed pip"
 
-    # RR per TP
-    tp1_rr = sig.tp1_rr
-    tp2_rr = sig.tp2_rr
-    tp3_rr = sig.tp3_rr
-
-    # Trigger notes
-    trig_str = (
-        f"{sig.trigger_score}/{sig.trigger_max} [{sig.trigger_notes}]"
-        if sig.trigger_notes
-        else f"{sig.trigger_score}/{sig.trigger_max}"
-    )
-
-    # Confluence notes
+    # Trigger / Confluence notes
+    if is_setup:
+        trig_str = f"[{sig.trigger_notes}]" if sig.trigger_notes else "SETUP"
+    else:
+        trig_str = (
+            f"{sig.trigger_score}/{sig.trigger_max} [{sig.trigger_notes}]"
+            if sig.trigger_notes else f"{sig.trigger_score}/{sig.trigger_max}"
+        )
     conf_str = (
         f"{sig.confluence_score} [{sig.confluence_notes}]"
-        if sig.confluence_notes
-        else f"{sig.confluence_score}"
+        if sig.confluence_notes else f"{sig.confluence_score}"
     )
 
-    htf_str = sig.htf_bias.strip() if sig.htf_bias else "-"
-
-    # ── Susun pesan ───────────────────────────────────────────────────
+    # Susun pesan
     lines = [
-        f"{emoji} <b>SINYAL {sig.direction} {dash} {sig.symbol}</b>",
-        f"TF: <b>{sig.tf}</b>  |  {time_str}",
+        f"{emoji} <b>{mode_label}{trade_label} {dash} {sig.symbol}</b>",
+        f"TF: <b>{sig.tf}</b>  |  {_to_wib(sig.close_time)}",
     ]
-
     if signal_id:
         lines.append(f"ID: <code>{signal_id}</code>")
+    if is_setup and exec_tf:
+        lines.append(f"\U0001f3af Eksekusi di : <b>{exec_tf}</b>")
 
     lines += [
         "",
-        f"\U0001f4cc Entry Zone : <code>{entry_str}</code>",            # 📌
-        f"\U0001f6d1 Stop Loss  : <code>{sl_str}</code>  <i>({sl_label})</i>",  # 🛑
-        f"\U0001f3af TP1        : <code>{tp1_str}</code>  <i>(RR {tp1_rr})</i>",  # 🎯
-        f"\U0001f3af TP2        : <code>{tp2_str}</code>  <i>(RR {tp2_rr})</i>",
-        f"\U0001f3af TP3        : <code>{tp3_str}</code>  <i>(RR {tp3_rr})</i>",
-        f"\U0001f4ca RR         : <code>{rr_str}</code>",               # 📊
+        f"\U0001f4cc Entry Zone : <code>{entry_str}</code>",
+        f"\U0001f6d1 Stop Loss  : <code>{sl_str}</code>  <i>({sl_label})</i>",
+        f"\U0001f3af TP1        : <code>{tp1_str}</code>  <i>(RR {sig.tp1_rr})</i>",
+        f"\U0001f3af TP2        : <code>{tp2_str}</code>  <i>(RR {sig.tp2_rr})</i>",
+        f"\U0001f3af TP3        : <code>{tp3_str}</code>  <i>(RR {sig.tp3_rr})</i>",
+        f"\U0001f4ca RR         : <code>{rr_str}</code>",
+    ]
+
+    # Jika setup plan, tampilkan dasar penentuan zona entry secara eksplisit
+    if is_setup and sig.trigger_notes:
+        tn = sig.trigger_notes
+        if "Fib=" in tn:
+            fib_part = tn.split("Fib=")[-1].strip()
+            lines.append(f"\U0001f4d0 Zona basis : <b>Fibonacci {fib_part}</b>")
+        else:
+            lines.append(f"\U0001f4d0 Zona basis : <i>EMA50 area</i>")
+
+    lines += [
         "",
-        "\u2500\u2500 Analisis Teknikal \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500",  # ──
-        f"\U0001f4c8 HTF Bias   : <code>{htf_str}</code>",              # 📈
-        f"\U0001f9e9 Trigger    : <code>{trig_str}</code>",             # 🧩
-        f"\U0001f48e Confluence : <code>{conf_str}</code>",             # 💎
+        "\u2500\u2500 Analisis Teknikal \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500",
+        f"\U0001f4c8 HTF Bias   : <code>{sig.htf_bias.strip() or '-'}</code>",
+        f"\U0001f9e9 Trigger    : <code>{trig_str}</code>",
+        f"\U0001f48e Confluence : <code>{conf_str}</code>",
     ]
 
     if sig.pattern_names:
-        lines.append(f"\U0001f56f Pattern    : <code>{sig.pattern_names}</code>")   # 🕯
+        lines.append(f"\U0001f56f Pattern    : <code>{sig.pattern_names}</code>")
     if sig.fib_detail:
-        lines.append(f"\U0001f4d0 Fibonacci  : <code>{sig.fib_detail}</code>")      # 📐
+        lines.append(f"\U0001f4d0 Fibonacci  : <code>{sig.fib_detail}</code>")
     if sig.snr_detail:
-        lines.append(f"\U0001f532 SnR        : <code>{sig.snr_detail}</code>")      # 🔲
+        lines.append(f"\U0001f532 SnR        : <code>{sig.snr_detail}</code>")
     if sig.snd_detail:
-        lines.append(f"\U0001f4e6 Zone       : <code>{sig.snd_detail}</code>")      # 📦
+        lines.append(f"\U0001f4e6 Zone       : <code>{sig.snd_detail}</code>")
     if sig.divergence_detail:
-        lines.append(f"\U0001f500 Divergence : <code>{sig.divergence_detail}</code>")  # 🔀
+        lines.append(f"\U0001f500 Divergence : <code>{sig.divergence_detail}</code>")
     if sig.session_name:
-        lines.append(f"\U0001f550 Sesi       : <code>{sig.session_name}</code>")    # 🕐
+        lines.append(f"\U0001f550 Sesi       : <code>{sig.session_name}</code>")
     if sig.atr_value and sig.atr_value > 0:
-        lines.append(f"\U0001f4c9 ATR        : <code>{sig.atr_value:.4f}</code>")   # 📉
+        lines.append(f"\U0001f4c9 ATR        : <code>{sig.atr_value:.4f}</code>")
 
-    lines += [
-        "",
-        "\u26a0\ufe0f <i>Rekomendasi manual \u2014 bukan auto-trade.</i>",  # ⚠️
-    ]
+    lines += ["", "\u26a0\ufe0f <i>Rekomendasi manual \u2014 bukan auto-trade.</i>"]
+    if mode_note:
+        lines.append(mode_note)
 
     return "\n".join(lines)
-
-
-def format_startup(
-    login:            int,
-    server:           str,
-    symbols:          list[str],
-    timeframes:       list[str],
-    settings_summary: str,
-) -> str:
-    """Format pesan startup bot untuk Telegram."""
-    return (
-        "\U0001f680 <b>BOT TRADING ONLINE</b>\n\n"   # 🚀
-        f"Account  : <code>{login}</code>\n"
-        f"Server   : <code>{server}</code>\n"
-        f"Symbols  : {', '.join(symbols)}\n"
-        f"TFs      : {', '.join(timeframes)}\n\n"
-        f"{settings_summary}"
-    )

@@ -1,8 +1,4 @@
-"""
-logger.py
-=========
-Setup loguru untuk logging ke konsol dan file.
-"""
+"""logger.py — Setup loguru untuk logging ke konsol dan file."""
 from __future__ import annotations
 
 import sys
@@ -12,11 +8,7 @@ from loguru import logger
 
 
 def setup_logger() -> None:
-    """
-    Inisialisasi logger:
-    - Konsol: INFO ke atas, format berwarna.
-    - File: DEBUG ke atas, rotasi 5 MB, retensi 7 hari.
-    """
+    """Setup logger: konsol INFO+, file DEBUG+ (rotasi 5 MB, retensi 7 hari)."""
     Path("logs").mkdir(parents=True, exist_ok=True)
     logger.remove()
 

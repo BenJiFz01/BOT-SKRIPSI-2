@@ -1,8 +1,4 @@
-"""
-telegram.py
-===========
-Pengiriman pesan ke Telegram via Bot API.
-"""
+"""telegram.py — Pengiriman pesan HTML ke Telegram via Bot API."""
 from __future__ import annotations
 
 import requests
@@ -10,17 +6,7 @@ from loguru import logger
 
 
 def send_message(token: str, chat_id: str, text: str) -> None:
-    """
-    Kirim pesan HTML ke Telegram.
-
-    Args:
-        token:   Telegram Bot API token.
-        chat_id: ID chat atau channel tujuan.
-        text:    Teks pesan (mendukung tag HTML: <b>, <i>, <code>).
-
-    Raises:
-        requests.HTTPError jika pengiriman gagal.
-    """
+    """Kirim pesan HTML ke Telegram. Raises HTTPError jika gagal."""
     url = f"https://api.telegram.org/bot{token}/sendMessage"
     payload = {
         "chat_id":                  chat_id,

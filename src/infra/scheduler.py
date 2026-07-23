@@ -1,53 +1,28 @@
-"""
-scheduler.py
-============
-Deteksi candle close berdasarkan perubahan time bar terakhir.
-"""
+"""scheduler.py — Deteksi candle close berdasarkan perubahan time bar terakhir."""
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Dict, Tuple
 
 import pandas as pd
 
 
 @dataclass
 class CandleCloseEvent:
-    """Event yang dipicu saat sebuah candle selesai (close)."""
     symbol:      str
     tf:          str
     closed_time: pd.Timestamp
 
 
 class CandleCloseWatcher:
-    """
-    Memantau perubahan bar terakhir per (symbol, timeframe).
-
-    Cara kerja:
-        Setiap kali bar terakhir berubah (time-nya lebih baru), berarti
-        bar sebelumnya sudah closed. Event dikembalikan dengan waktu bar
-        yang baru saja closed.
-    """
+    """Memantau perubahan bar terakhir per (symbol, timeframe)."""
 
     def __init__(self) -> None:
-        self._last_bar_time: Dict[Tuple[str, str], pd.Timestamp] = {}
+        self._last_bar_time: dict[tuple[str, str], pd.Timestamp] = {}
 
-    def check(
-        self,
-        symbol: str,
-        tf:     str,
-        df:     pd.DataFrame,
-    ) -> CandleCloseEvent | None:
+    def check(self, symbol: str, tf: str, df: pd.DataFrame) -> CandleCloseEvent | None:
         """
-        Periksa apakah ada candle baru sejak pengecekan terakhir.
-
-        Args:
-            symbol: Nama instrumen.
-            tf:     Timeframe string.
-            df:     DataFrame OHLCV yang sudah diurutkan ascending.
-
-        Returns:
-            CandleCloseEvent jika ada candle baru, None jika belum.
+        Cek apakah ada candle baru sejak pengecekan terakhir.
+        Returns CandleCloseEvent jika ada candle baru, None jika belum.
         """
         last_time = df["time"].iloc[-1]
         key       = (symbol, tf)

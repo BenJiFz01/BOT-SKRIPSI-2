@@ -1,66 +1,38 @@
-"""
-signal_logger.py
-================
-Pencatatan histori sinyal trading ke CSV dan JSON.
-
-Output:
-    logs/signal_history.csv   -- bisa dibuka langsung di Excel
-    logs/signal_history.json  -- untuk proses programatik / statistik
-
-Cara pakai:
-    sl = SignalLogger()
-    signal_id = sl.log_signal(sig)          # catat sinyal baru
-    sl.update_outcome(signal_id, "WIN_TP1") # update hasil setelah sinyal keluar
-    stats = sl.get_stats()                  # hitung win rate
-"""
+"""signal_logger.py — Pencatatan histori sinyal ke CSV dan JSON."""
 from __future__ import annotations
 
 import csv
 import json
 from dataclasses import asdict, dataclass
-from datetime import datetime
+from datetime import datetime, timezone, timedelta
 from pathlib import Path
-from typing import Literal
 
 from src.models.signal import Signal
+
+
+_WIB = timezone(timedelta(hours=7))
+
+
+def _now_wib() -> str:
+    """Waktu sekarang dalam WIB (UTC+7), format ISO tanpa timezone suffix."""
+    return datetime.now(tz=_WIB).strftime("%Y-%m-%dT%H:%M:%S")
 
 
 LOG_DIR   = Path("logs")
 CSV_PATH  = LOG_DIR / "signal_history.csv"
 JSON_PATH = LOG_DIR / "signal_history.json"
 
-OUTCOME = Literal["PENDING", "WIN_TP1", "WIN_TP2", "WIN_TP3", "LOSS", "CANCELLED"]
-
 CSV_FIELDS = [
-    "signal_id",
-    "timestamp",
-    "symbol",
-    "timeframe",
-    "direction",
-    "candle_close",
-    "entry",
-    "sl",
-    "tp1",
-    "tp2",
-    "tp3",
-    "rr",
-    "trigger_score",
-    "confluence_score",
-    "htf_bias",
-    "trigger_notes",
-    "confluence_notes",
-    "pattern_names",
-    "fib_detail",
-    "snr_detail",
-    "snd_detail",
-    "divergence_detail",
-    "session_name",
-    "sl_method",
-    "atr_value",
-    "outcome",
-    "outcome_price",
-    "outcome_time",
-    "notes",
+    "signal_id", "timestamp", "symbol", "timeframe", "direction",
+    "signal_mode", "trade_mode", "is_setup_plan", "exec_tf", "candle_close",
+    "entry", "sl", "tp1", "tp2", "tp3", "rr",
+    "trigger_score", "confluence_score", "htf_bias",
+    "trigger_notes", "confluence_notes", "pattern_names",
+    "fib_detail", "snr_detail", "snd_detail", "divergence_detail",
+    "session_name", "sl_method", "atr_value",
+    "outcome", "outcome_price", "outcome_time",
+    "tp1_hit_time", "tp2_hit_time", "tp3_hit_time", "sl_hit_time",
+    "duration_minutes", "notes",
 ]
 
 
@@ -71,6 +43,10 @@ class SignalRecord:
     symbol:            str
     timeframe:         str
     direction:         str
+    signal_mode:       str
+    trade_mode:        str
+    is_setup_plan:     bool
+    exec_tf:           str
     candle_close:      str
     entry:             float
     sl:                float
@@ -78,8 +54,8 @@ class SignalRecord:
     tp2:               float
     tp3:               float
     rr:                float
-    trigger_score:     str        # contoh: "5/6"
-    confluence_score:  str        # contoh: "4/5"
+    trigger_score:     str
+    confluence_score:  str
     htf_bias:          str
     trigger_notes:     str
     confluence_notes:  str
@@ -94,20 +70,17 @@ class SignalRecord:
     outcome:           str   = "PENDING"
     outcome_price:     float = 0.0
     outcome_time:      str   = ""
+    tp1_hit_time:      str   = ""
+    tp2_hit_time:      str   = ""
+    tp3_hit_time:      str   = ""
+    sl_hit_time:       str   = ""
+    duration_minutes:  int   = 0
     notes:             str   = ""
 
 
 def _make_signal_id(symbol: str, tf: str, timestamp: str) -> str:
-    """
-    Buat ID unik untuk sinyal.
-    Format: XAUUSD_H1_20260720_140000
-    """
     clean = (
-        timestamp
-        .replace(":", "")
-        .replace("-", "")
-        .replace("T", "_")
-        .replace(" ", "_")
+        timestamp.replace(":", "").replace("-", "").replace("T", "_").replace(" ", "_")
     )[:15]
     return f"{symbol}_{tf}_{clean}"
 
@@ -122,23 +95,12 @@ class SignalLogger:
     ) -> None:
         self.csv_path  = Path(csv_path)
         self.json_path = Path(json_path)
-        self._ensure_dirs()
-        self._ensure_csv_header()
-
-    # ── Setup ─────────────────────────────────────────────────────────
-
-    def _ensure_dirs(self) -> None:
         self.csv_path.parent.mkdir(parents=True, exist_ok=True)
-
-    def _ensure_csv_header(self) -> None:
         if not self.csv_path.exists():
             with open(self.csv_path, "w", newline="", encoding="utf-8") as f:
-                writer = csv.DictWriter(f, fieldnames=CSV_FIELDS)
-                writer.writeheader()
+                csv.DictWriter(f, fieldnames=CSV_FIELDS).writeheader()
 
-    # ── JSON helpers ──────────────────────────────────────────────────
-
-    def _load_json(self) -> dict[str, dict]:
+    def _load(self) -> dict[str, dict]:
         if not self.json_path.exists():
             return {}
         try:
@@ -147,225 +109,192 @@ class SignalLogger:
         except Exception:
             return {}
 
-    def _save_json(self, data: dict[str, dict]) -> None:
+    def _save(self, data: dict[str, dict]) -> None:
         with open(self.json_path, "w", encoding="utf-8") as f:
             json.dump(data, f, indent=2, ensure_ascii=False)
 
-    # ── Catat sinyal baru ─────────────────────────────────────────────
+    def _rewrite_csv(self, data: dict[str, dict]) -> None:
+        with open(self.csv_path, "w", newline="", encoding="utf-8") as f:
+            w = csv.DictWriter(f, fieldnames=CSV_FIELDS)
+            w.writeheader()
+            for rec in data.values():
+                w.writerow({k: rec.get(k, "") for k in CSV_FIELDS})
 
     def log_signal(self, sig: Signal) -> str:
-        """
-        Catat sinyal ke CSV dan JSON.
-
-        Args:
-            sig: Objek Signal dari engine.
-
-        Returns:
-            signal_id: ID unik sinyal yang baru dicatat.
-        """
-        now = datetime.now().isoformat(timespec="seconds")
+        """Catat sinyal baru ke CSV dan JSON. Return signal_id."""
+        now = _now_wib()
         sid = _make_signal_id(sig.symbol, sig.tf, now)
 
-        record = SignalRecord(
-            signal_id        = sid,
-            timestamp        = now,
-            symbol           = sig.symbol,
-            timeframe        = sig.tf,
-            direction        = sig.direction,
-            candle_close     = sig.close_time,
-            entry            = round(sig.entry, 5),
-            sl               = round(sig.sl,    5) if sig.sl  is not None else 0.0,
-            tp1              = round(sig.tp,     5) if sig.tp  is not None else 0.0,
-            tp2              = round(sig.tp2,    5) if sig.tp2 is not None else 0.0,
-            tp3              = round(sig.tp3,    5) if sig.tp3 is not None else 0.0,
-            rr               = round(sig.rr,     2) if sig.rr  is not None else 0.0,
-            trigger_score    = f"{sig.trigger_score}/{sig.trigger_max}",
-            confluence_score = f"{sig.confluence_score}/{sig.confluence_max}",
-            htf_bias         = sig.htf_bias,
-            trigger_notes    = sig.trigger_notes,
-            confluence_notes = sig.confluence_notes,
-            pattern_names    = sig.pattern_names,
-            fib_detail       = sig.fib_detail,
-            snr_detail       = sig.snr_detail,
-            snd_detail       = sig.snd_detail,
+        is_setup = getattr(sig, "is_setup_plan", False)
+        rec = SignalRecord(
+            signal_id         = sid,
+            timestamp         = now,
+            symbol            = sig.symbol,
+            timeframe         = sig.tf,
+            direction         = sig.direction,
+            signal_mode       = getattr(sig, "signal_mode",   "trend"),
+            trade_mode        = getattr(sig, "trade_mode",    "intraday"),
+            is_setup_plan     = is_setup,
+            exec_tf           = getattr(sig, "exec_tf",       ""),
+            candle_close      = sig.close_time,
+            entry             = round(sig.entry, 5),
+            sl                = round(sig.sl,  5) if sig.sl  is not None else 0.0,
+            tp1               = round(sig.tp,  5) if sig.tp  is not None else 0.0,
+            tp2               = round(sig.tp2, 5) if sig.tp2 is not None else 0.0,
+            tp3               = round(sig.tp3, 5) if sig.tp3 is not None else 0.0,
+            rr                = round(sig.rr,  2) if sig.rr  is not None else 0.0,
+            trigger_score     = f"{sig.trigger_score}/{sig.trigger_max}",
+            confluence_score  = f"{sig.confluence_score}/{sig.confluence_max}",
+            htf_bias          = sig.htf_bias,
+            trigger_notes     = sig.trigger_notes,
+            confluence_notes  = sig.confluence_notes,
+            pattern_names     = sig.pattern_names,
+            fib_detail        = sig.fib_detail,
+            snr_detail        = sig.snr_detail,
+            snd_detail        = sig.snd_detail,
             divergence_detail = sig.divergence_detail,
-            session_name     = sig.session_name,
-            sl_method        = sig.sl_method,
-            atr_value        = round(sig.atr_value, 4),
+            session_name      = sig.session_name,
+            sl_method         = sig.sl_method,
+            atr_value         = round(sig.atr_value, 4),
+            # Setup plan pakai outcome "SETUP" agar tidak masuk tracker
+            outcome           = "SETUP" if is_setup else "PENDING",
         )
 
         with open(self.csv_path, "a", newline="", encoding="utf-8") as f:
-            writer = csv.DictWriter(f, fieldnames=CSV_FIELDS)
-            writer.writerow({k: getattr(record, k, "") for k in CSV_FIELDS})
+            csv.DictWriter(f, fieldnames=CSV_FIELDS).writerow(
+                {k: getattr(rec, k, "") for k in CSV_FIELDS}
+            )
 
-        data = self._load_json()
-        data[sid] = asdict(record)
-        self._save_json(data)
-
+        data = self._load()
+        data[sid] = asdict(rec)
+        self._save(data)
         return sid
 
-    # ── Update hasil sinyal ───────────────────────────────────────────
-
-    def update_outcome(
-        self,
-        signal_id:    str,
-        outcome:      str,
-        price:        float = 0.0,
-        notes:        str   = "",
-    ) -> bool:
-        """
-        Perbarui hasil (outcome) sinyal yang sudah ada.
-
-        Args:
-            signal_id: ID sinyal yang akan diupdate.
-            outcome:   Salah satu dari PENDING/WIN_TP1/WIN_TP2/WIN_TP3/LOSS/CANCELLED.
-            price:     Harga saat outcome terjadi.
-            notes:     Catatan tambahan (opsional).
-
-        Returns:
-            True jika berhasil, False jika signal_id tidak ditemukan.
-        """
-        data = self._load_json()
+    def update_hit_time(self, signal_id: str, level: str, hit_time: str) -> bool:
+        """Catat waktu TP/SL tersentuh. level = 'tp1'|'tp2'|'tp3'|'sl'."""
+        data = self._load()
         if signal_id not in data:
             return False
-
-        data[signal_id]["outcome"]       = outcome
-        data[signal_id]["outcome_price"] = price
-        data[signal_id]["outcome_time"]  = datetime.now().isoformat(timespec="seconds")
-        data[signal_id]["notes"]         = notes
-        self._save_json(data)
+        field = {"tp1": "tp1_hit_time", "tp2": "tp2_hit_time",
+                 "tp3": "tp3_hit_time", "sl": "sl_hit_time"}.get(level.lower())
+        if not field:
+            return False
+        data[signal_id][field] = hit_time
+        self._save(data)
         self._rewrite_csv(data)
         return True
 
-    def _rewrite_csv(self, data: dict[str, dict]) -> None:
-        with open(self.csv_path, "w", newline="", encoding="utf-8") as f:
-            writer = csv.DictWriter(f, fieldnames=CSV_FIELDS)
-            writer.writeheader()
-            for rec in data.values():
-                writer.writerow({k: rec.get(k, "") for k in CSV_FIELDS})
+    def update_outcome(
+        self,
+        signal_id:  str,
+        outcome:    str,
+        price:      float = 0.0,
+        notes:      str   = "",
+        duration_m: int   = 0,
+    ) -> bool:
+        """Update hasil akhir sinyal."""
+        data = self._load()
+        if signal_id not in data:
+            return False
+        rec = data[signal_id]
+        rec["outcome"]       = outcome
+        rec["outcome_price"] = price
+        rec["outcome_time"]  = _now_wib()
+        rec["notes"]         = notes
+        if duration_m > 0:
+            rec["duration_minutes"] = duration_m
+        elif rec.get("timestamp") and not rec.get("duration_minutes"):
+            try:
+                ts = rec["timestamp"]
+                dt_sig = datetime.fromisoformat(ts)
+                if dt_sig.tzinfo is None:
+                    dt_sig = dt_sig.replace(tzinfo=_WIB)
+                dur = int((datetime.now(tz=_WIB) - dt_sig).total_seconds() / 60)
+                rec["duration_minutes"] = dur
+            except Exception:
+                pass
+        if outcome == "LOSS" and not rec.get("sl_hit_time"):
+            rec["sl_hit_time"] = rec["outcome_time"]
+        self._save(data)
+        self._rewrite_csv(data)
+        return True
 
-    # ── Statistik ─────────────────────────────────────────────────────
+    def get_all_records(self) -> list[dict]:
+        return list(self._load().values())
+
+    def get_pending(self) -> list[dict]:
+        """Sinyal aktif PENDING (bukan setup plan) untuk dimonitor tracker."""
+        return [r for r in self.get_all_records() if r.get("outcome") == "PENDING"]
+
+    def get_trackable(self) -> list[dict]:
+        """Semua sinyal yang perlu dimonitor tracker: PENDING + SETUP (setup plan)."""
+        return [r for r in self.get_all_records() if r.get("outcome") in ("PENDING", "SETUP")]
+
+    def get_by_id(self, signal_id: str) -> dict | None:
+        return self._load().get(signal_id)
 
     def get_stats(self) -> dict:
-        """Hitung statistik win rate dari semua sinyal yang sudah dievaluasi."""
-        data = self._load_json()
+        """Statistik hanya dari sinyal terkonfirmasi (bukan setup plan)."""
+        wins = {"WIN_TP1": 0, "WIN_TP2": 0, "WIN_TP3": 0}
+        losses = pending = cancelled = 0
+        rr_list: list[float] = []
+        dur_list: list[int]  = []
+        by_tf: dict = {}
+        by_dir: dict = {}
+        by_mode: dict = {}
 
-        wins      = {"WIN_TP1": 0, "WIN_TP2": 0, "WIN_TP3": 0}
-        losses    = 0
-        pending   = 0
-        cancelled = 0
-        rr_list:  list[float] = []
-
-        by_tf:        dict[str, dict] = {}
-        by_direction: dict[str, dict] = {}
-        by_symbol:    dict[str, dict] = {}
-
-        def _bucket() -> dict:
+        def bucket():
             return {"total": 0, "win": 0, "loss": 0, "pending": 0}
 
-        for rec in data.values():
+        for rec in self.get_all_records():
+            # Skip setup plan dari statistik
+            if rec.get("is_setup_plan") or rec.get("outcome") == "SETUP":
+                continue
+
             outcome = rec.get("outcome", "PENDING")
             tf      = rec.get("timeframe", "?")
             direc   = rec.get("direction", "?")
-            sym     = rec.get("symbol", "?")
+            mode    = rec.get("signal_mode", "trend")
             rr      = float(rec.get("rr", 0) or 0)
+            dur     = int(rec.get("duration_minutes", 0) or 0)
 
-            for bucket, key in [(by_tf, tf), (by_direction, direc), (by_symbol, sym)]:
-                if key not in bucket:
-                    bucket[key] = _bucket()
-                bucket[key]["total"] += 1
+            for bmap, key in [(by_tf, tf), (by_dir, direc), (by_mode, mode)]:
+                bmap.setdefault(key, bucket())
+                bmap[key]["total"] += 1
 
             if outcome == "PENDING":
                 pending += 1
-                by_tf[tf]["pending"]        += 1
-                by_direction[direc]["pending"] += 1
-                by_symbol[sym]["pending"]    += 1
-                continue
-
-            if outcome in wins:
+                for bmap, key in [(by_tf, tf), (by_dir, direc), (by_mode, mode)]:
+                    bmap[key]["pending"] += 1
+            elif outcome in wins:
                 wins[outcome] += 1
-                if rr > 0:
-                    rr_list.append(rr)
-                by_tf[tf]["win"]           += 1
-                by_direction[direc]["win"] += 1
-                by_symbol[sym]["win"]      += 1
+                if rr  > 0: rr_list.append(rr)
+                if dur > 0: dur_list.append(dur)
+                for bmap, key in [(by_tf, tf), (by_dir, direc), (by_mode, mode)]:
+                    bmap[key]["win"] += 1
             elif outcome == "LOSS":
                 losses += 1
-                by_tf[tf]["loss"]           += 1
-                by_direction[direc]["loss"] += 1
-                by_symbol[sym]["loss"]      += 1
+                for bmap, key in [(by_tf, tf), (by_dir, direc), (by_mode, mode)]:
+                    bmap[key]["loss"] += 1
             elif outcome == "CANCELLED":
                 cancelled += 1
 
         total_wins = sum(wins.values())
         decided    = total_wins + losses
-        win_rate   = round(total_wins / decided * 100, 1) if decided > 0 else 0.0
-
         return {
-            "total_signals": len(data),
-            "pending":       pending,
-            "decided":       decided,
-            "win_tp1":       wins["WIN_TP1"],
-            "win_tp2":       wins["WIN_TP2"],
-            "win_tp3":       wins["WIN_TP3"],
-            "total_wins":    total_wins,
-            "losses":        losses,
-            "cancelled":     cancelled,
-            "win_rate_pct":  win_rate,
-            "avg_rr":        round(sum(rr_list) / len(rr_list), 2) if rr_list else 0.0,
-            "best_rr":       round(max(rr_list), 2) if rr_list else 0.0,
-            "worst_rr":      round(min(rr_list), 2) if rr_list else 0.0,
-            "by_timeframe":  by_tf,
-            "by_direction":  by_direction,
-            "by_symbol":     by_symbol,
+            "total_signals":  decided + pending + cancelled,
+            "pending":        pending,
+            "decided":        decided,
+            "win_tp1":        wins["WIN_TP1"],
+            "win_tp2":        wins["WIN_TP2"],
+            "win_tp3":        wins["WIN_TP3"],
+            "total_wins":     total_wins,
+            "losses":         losses,
+            "cancelled":      cancelled,
+            "win_rate_pct":   round(total_wins / decided * 100, 1) if decided else 0.0,
+            "avg_rr":         round(sum(rr_list)  / len(rr_list),  2) if rr_list  else 0.0,
+            "avg_duration_m": int(sum(dur_list) / len(dur_list))       if dur_list else 0,
+            "by_timeframe":   by_tf,
+            "by_direction":   by_dir,
+            "by_mode":        by_mode,
         }
-
-    def format_stats_telegram(self) -> str:
-        """Format statistik untuk dikirim ke Telegram (HTML)."""
-        s = self.get_stats()
-
-        lines = [
-            "<b>STATISTIK BOT TRADING</b>",
-            "",
-            f"Total sinyal     : <code>{s['total_signals']}</code>",
-            f"Pending          : <code>{s['pending']}</code>",
-            f"Sudah dievaluasi : <code>{s['decided']}</code>",
-            "",
-            f"WIN TP1  : <code>{s['win_tp1']}</code>",
-            f"WIN TP2  : <code>{s['win_tp2']}</code>",
-            f"WIN TP3  : <code>{s['win_tp3']}</code>",
-            f"LOSS     : <code>{s['losses']}</code>",
-            f"BATAL    : <code>{s['cancelled']}</code>",
-            "",
-            f"<b>Win Rate : {s['win_rate_pct']}%</b>",
-            f"Avg RR   : <code>{s['avg_rr']}</code>",
-            f"Best RR  : <code>{s['best_rr']}</code>",
-        ]
-
-        if s["by_timeframe"]:
-            lines.append("")
-            lines.append("<b>Per Timeframe:</b>")
-            for tf, d in sorted(s["by_timeframe"].items()):
-                dec = d["win"] + d["loss"]
-                wr  = round(d["win"] / dec * 100, 1) if dec > 0 else 0
-                lines.append(
-                    f"  {tf}: {d['win']}W {d['loss']}L ({wr}%) | pending={d['pending']}"
-                )
-
-        if s["by_direction"]:
-            lines.append("")
-            lines.append("<b>Per Arah:</b>")
-            for direc, d in s["by_direction"].items():
-                dec = d["win"] + d["loss"]
-                wr  = round(d["win"] / dec * 100, 1) if dec > 0 else 0
-                lines.append(f"  {direc}: {d['win']}W {d['loss']}L ({wr}%)")
-
-        return "\n".join(lines)
-
-    def get_all_records(self) -> list[dict]:
-        """Kembalikan semua record sebagai list dict."""
-        return list(self._load_json().values())
-
-    def get_pending(self) -> list[dict]:
-        """Kembalikan semua sinyal yang masih PENDING."""
-        return [r for r in self.get_all_records() if r.get("outcome") == "PENDING"]
