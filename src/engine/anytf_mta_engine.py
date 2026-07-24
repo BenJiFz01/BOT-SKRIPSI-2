@@ -102,7 +102,14 @@ def _reject(df: pd.DataFrame, reason: str) -> None:
     df.attrs["reject_reason"] = reason
 
 def _bias_from_tf(df: pd.DataFrame) -> str | None:
-    """Baca bias BULL/BEAR dari satu TF berdasarkan EMA50/200. Validasi gap, slope, fallback ATR."""
+    """
+    Baca bias BULL/BEAR dari satu TF berdasarkan EMA50/200.
+    Tiga jalur deteksi (urutan prioritas):
+      1. EMA200 Breakout Momentum — harga baru saja breakdown/breakout EMA200
+         dengan candle besar (> 0.8×ATR). Langsung BEAR/BULL tanpa nunggu slope.
+      2. Normal bias — posisi EMA50/200 + slope 40% + gap minimum.
+      3. Fallback ATR — harga jauh (>1×ATR) dari EMA200 sebagai konfirmasi akhir.
+    """
     if len(df) < 220:
         return None
 
@@ -114,6 +121,42 @@ def _bias_from_tf(df: pd.DataFrame) -> str | None:
     if any(v is None for v in [close, ema50, ema200]):
         return None
 
+    atr = _atr_proxy(df)
+
+    # ── Jalur 1: EMA200 Breakout Momentum ─────────────────────────────────────
+    # Deteksi: candle sebelumnya di atas EMA200, candle sekarang di bawah (atau sebaliknya)
+    # Syarat:
+    #   a. Body candle besar (>= 0.8×ATR) = momentum impulsif, bukan spike kecil
+    #   b. Konfirmasi 2 candle: candle sebelum breakout candle juga harus di sisi asal
+    #      → mencegah false signal di choppy market yang bolak-balik cross EMA200
+    if atr > 0 and len(df) >= 4:
+        prev2       = df.iloc[-3]   # candle breakout (sudah close)
+        prev3       = df.iloc[-4]   # candle sebelum breakout — konfirmasi sisi asal
+        close_prev  = _safe(prev2, "close")
+        ema200_prev = _safe(prev2, "ema_200")
+        close_prev3 = _safe(prev3, "close")
+        ema200_prev3= _safe(prev3, "ema_200")
+        open_last   = _safe(last, "open")
+
+        if all(v is not None for v in [close_prev, ema200_prev, close_prev3, ema200_prev3, open_last]):
+            candle_body = abs(float(close) - float(open_last))   # type: ignore[arg-type]
+            is_momentum = candle_body >= 0.8 * atr
+
+            # Breakout BULL: 2 candle sebelumnya di bawah EMA200, sekarang di atas
+            if (float(close_prev3) < float(ema200_prev3)        # type: ignore[arg-type]
+                    and float(close_prev) < float(ema200_prev)   # type: ignore[arg-type]
+                    and float(close) > float(ema200)             # type: ignore[arg-type]
+                    and is_momentum):
+                return "BULL"
+
+            # Breakdown BEAR: 2 candle sebelumnya di atas EMA200, sekarang di bawah
+            if (float(close_prev3) > float(ema200_prev3)        # type: ignore[arg-type]
+                    and float(close_prev) > float(ema200_prev)   # type: ignore[arg-type]
+                    and float(close) < float(ema200)             # type: ignore[arg-type]
+                    and is_momentum):
+                return "BEAR"
+
+    # ── Jalur 2: Normal Bias (posisi + slope + gap) ────────────────────────────
     is_bull_pos = close > ema200 and ema50 > ema200   # type: ignore[operator]
     is_bear_pos = close < ema200 and ema50 < ema200   # type: ignore[operator]
 
@@ -121,7 +164,7 @@ def _bias_from_tf(df: pd.DataFrame) -> str | None:
         return None
 
     min_gap_pct = 0.0005
-    gap_pct     = abs(ema50 - ema200) / close
+    gap_pct     = abs(ema50 - ema200) / close         # type: ignore[operator]
 
     idx = df.index.get_loc(last.name) if hasattr(last, "name") and last.name in df.index else -2
     try:
@@ -135,9 +178,10 @@ def _bias_from_tf(df: pd.DataFrame) -> str | None:
         n_up    = (diffs > 0).sum()
         n_dn    = (diffs < 0).sum()
         n_total = len(diffs)
-        if is_bull_pos and n_up / n_total >= 0.5:
+        # Diturunkan dari 0.5 → 0.4 agar lebih cepat terbaca saat momentum baru mulai
+        if is_bull_pos and n_up / n_total >= 0.4:
             slope_ok = True
-        if is_bear_pos and n_dn / n_total >= 0.5:
+        if is_bear_pos and n_dn / n_total >= 0.4:
             slope_ok = True
     else:
         slope_ok = True
@@ -145,11 +189,11 @@ def _bias_from_tf(df: pd.DataFrame) -> str | None:
     if gap_pct >= min_gap_pct and slope_ok:
         return "BULL" if is_bull_pos else "BEAR"
 
-    atr = _atr_proxy(df)
+    # ── Jalur 3: Fallback ATR ──────────────────────────────────────────────────
     if atr > 0:
-        if is_bull_pos and close > ema200 + atr:
+        if is_bull_pos and close > ema200 + atr:      # type: ignore[operator]
             return "BULL"
-        if is_bear_pos and close < ema200 - atr:
+        if is_bear_pos and close < ema200 - atr:      # type: ignore[operator]
             return "BEAR"
 
     return None
@@ -291,10 +335,31 @@ def _trigger_score(df: pd.DataFrame, direction: str, min_score: int = 4) -> tupl
             notes.append("ALIGN-")
 
     # RSI arah + tidak di zona ekstrem
+    # Relaksasi: jika momentum kuat (MACD searah + candle searah), RSI ekstrem tidak di-reject
+    # karena momentum impulsif memang mendorong RSI ke zona ekstrem
+    _momentum_strong = (
+        mhist is not None and mhist_p is not None and open_ is not None
+        and (
+            (direction == "BUY"  and mhist > mhist_p and close > open_)
+            or (direction == "SELL" and mhist < mhist_p and close < open_)
+        )
+    )
     if rsi is not None and rsi_p is not None:
-        if (direction == "BUY"  and rsi < 65 and rsi > rsi_p) or \
-           (direction == "SELL" and rsi > 35 and rsi < rsi_p):
-            score += 1; notes.append(f"RSI+({rsi:.0f})")
+        rsi_normal_ok = (
+            (direction == "BUY"  and rsi < 65 and rsi > rsi_p)
+            or (direction == "SELL" and rsi > 35 and rsi < rsi_p)
+        )
+        rsi_momentum_ok = (
+            # Saat momentum kuat, relaksasi batas: BUY boleh s/d RSI 75, SELL boleh s/d RSI 25
+            _momentum_strong and (
+                (direction == "BUY"  and rsi < 75 and rsi > rsi_p)
+                or (direction == "SELL" and rsi > 25 and rsi < rsi_p)
+            )
+        )
+        if rsi_normal_ok or rsi_momentum_ok:
+            score += 1
+            tag = "RSI+MOM" if (rsi_momentum_ok and not rsi_normal_ok) else "RSI+"
+            notes.append(f"{tag}({rsi:.0f})")
         else:
             notes.append(f"RSI-({rsi:.0f})")
 
@@ -416,13 +481,14 @@ def _confluence_score(
             df=df, atr=atr, sl=sl, tp1_rr=tp1_rr,
         )
         if is_scalping and "SNR_BLOCKED" in snr_note:
-            score = -99
+            # Penalty -1 bukan hard reject — sinyal masih bisa lolos jika skor cukup
+            score -= 1
             detail["snr_detail"] = snr_note
-            notes.append("SnR_BLOCKED(REJECT)")
-            return score, " ".join(notes), detail
-        score += snr_sc
-        detail["snr_detail"] = snr_note
-        notes.append("SnR+" if snr_sc > 0 else "SnR-")
+            notes.append("SnR_BLOCKED(-1)")
+        else:
+            score += snr_sc
+            detail["snr_detail"] = snr_note
+            notes.append("SnR+" if snr_sc > 0 else "SnR-")
     else:
         notes.append("SnR_SKIP")
 
@@ -567,15 +633,15 @@ def scan_setup_plan(
         if atr <= 0 or atr < price_now * atr_min_pct:
             continue
 
-        # Tentukan entry zone: utamakan Fibonacci, fallback ke EMA50
-        ema50_val = _safe(last, "ema_50")
-
+        # Setup plan intraday (H1) wajib ada level Fibonacci kuat
+        # Setup plan scalping (M15) boleh fallback ke EMA50
+        swing = last_swing(df_anchor, lookback=fib_lookback_for_tf(anchor_tf), direction=direction)
         fib_anchor:      float | None = None
         fib_anchor_name: str          = ""
+        ema50_val = _safe(last, "ema_50")  # selalu di-assign agar Tier 2 fallback aman
 
-        swing = last_swing(df_anchor, lookback=fib_lookback_for_tf(anchor_tf), direction=direction)
         if swing is not None:
-            levels = fib_levels(swing[0], swing[1], swing[2])
+            levels     = fib_levels(swing[0], swing[1], swing[2])
             anchor_ref = ema50_val if ema50_val is not None else price_now
             candidates: list[tuple[float, str, float]] = []
             for name, px in levels.items():
@@ -592,15 +658,24 @@ def scan_setup_plan(
                 fib_anchor      = candidates[0][2]
                 fib_anchor_name = candidates[0][1]
 
+        # Intraday setup plan wajib ada Fibonacci
+        if trade_mode == "intraday" and fib_anchor is None:
+            continue
+
+        # Fallback bertingkat untuk zona entry setup plan:
+        # Tier 1 (terbaik) : Fibonacci level kuat (38.2 / 50 / 61.8)
+        # Tier 2 (fallback) : EMA50 — area pullback teknikal
+        # Tier 3 (skip)     : Tidak ada anchor → setup plan tidak dikirim
+        zona_basis: str = ""
+
         if fib_anchor is not None:
-            if direction == "BUY":
-                pb_low  = fib_anchor - 0.25 * atr
-                pb_high = fib_anchor + 0.25 * atr
-            else:
-                pb_low  = fib_anchor - 0.25 * atr
-                pb_high = fib_anchor + 0.25 * atr
+            # Tier 1: zona ±0.25×ATR dari fib anchor
+            pb_low  = fib_anchor - 0.25 * atr
+            pb_high = fib_anchor + 0.25 * atr
             pullback_price = fib_anchor
+            zona_basis = f"Fibonacci {fib_anchor_name}@{fib_anchor:.2f}"
         elif ema50_val is not None:
+            # Tier 2: zona asimetris di sekitar EMA50
             if direction == "BUY":
                 pb_low  = ema50_val - 0.3 * atr
                 pb_high = ema50_val + 0.5 * atr
@@ -608,33 +683,46 @@ def scan_setup_plan(
                 pb_low  = ema50_val - 0.5 * atr
                 pb_high = ema50_val + 0.3 * atr
             pullback_price = ema50_val
+            zona_basis = f"EMA50@{ema50_val:.2f}"
         else:
-            if direction == "BUY":
-                pb_low  = price_now - 1.2 * atr
-                pb_high = price_now - 0.5 * atr
-            else:
-                pb_low  = price_now + 0.5 * atr
-                pb_high = price_now + 1.2 * atr
-            pullback_price = (pb_low + pb_high) / 2
+            # Tier 3: tidak ada anchor teknikal — skip
+            continue
 
-        # Koreksi jika zona pullback sudah lewat harga saat ini
+        # Koreksi jika zona anchor sudah terlewat harga (zona perlu digeser sedikit)
+        # Hanya koreksi kecil — jika zona terlalu jauh dari anchor, sudah di-skip di bawah
         if direction == "BUY" and pb_high >= price_now:
-            pb_high = price_now - 0.2 * atr
-            pb_low  = price_now - 0.8 * atr
+            pb_high = price_now - 0.1 * atr
+            pb_low  = pb_high - 0.5 * atr
             pullback_price = pb_high
         elif direction == "SELL" and pb_low <= price_now:
-            pb_low  = price_now + 0.2 * atr
-            pb_high = price_now + 0.8 * atr
+            pb_low  = price_now + 0.1 * atr
+            pb_high = pb_low + 0.5 * atr
             pullback_price = pb_low
 
+        # Skip jika entry zone sudah terlalu jauh dari fib anchor (>1.5×ATR)
+        # Terjadi saat zona dikoreksi karena harga sudah melewati fib — zona tidak relevan
+        if fib_anchor is not None:
+            zone_mid = (pb_low + pb_high) / 2
+            if abs(zone_mid - fib_anchor) > 1.5 * atr:
+                continue
+
+        # Entry zone final (pb_low/pb_high sudah dikoreksi di atas)
+        final_entry_low  = round(pb_low,  2)
+        final_entry_high = round(pb_high, 2)
+
+        # Hitung SL/TP dari entry zone final.
+        # BUY  → sl_ref = entry_low  (SL di bawah entry_low, TP di atas entry_high)
+        # SELL → sl_ref = entry_high (SL di atas entry_high, TP di bawah entry_low)
+        # Ini memastikan SL selalu di LUAR zona entry, tidak overlap.
+        sl_ref = final_entry_low if direction == "BUY" else final_entry_high
         plan = dynamic_atr_sltp(
-            direction=direction, price_now=pullback_price, atr=atr,
+            direction=direction, price_now=sl_ref, atr=atr,
             sl_atr_mult=sl_atr_mult, tp1_rr=tp1_rr, tp2_rr=tp2_rr, tp3_rr=tp3_rr,
             max_sl_points=max_sl_points,
         )
         if plan is None:
             plan = fixed_zone_sltp(
-                direction=direction, price_now=pullback_price,
+                direction=direction, price_now=sl_ref,
                 entry_zone_pips=30, sl_pips=sl_pips,
                 tp1_pips=tp1_pips, tp2_pips=tp2_pips, tp3_pips=tp3_pips,
                 pip_size=pip_size,
@@ -642,8 +730,9 @@ def scan_setup_plan(
         if plan is None:
             continue
 
-        plan.entry_low  = round(pb_low,  2)
-        plan.entry_high = round(pb_high, 2)
+        # Terapkan entry zone final — SL/TP sudah konsisten dengan zona ini
+        plan.entry_low  = final_entry_low
+        plan.entry_high = final_entry_high
 
         entry_for_rr = plan.entry_high if direction == "BUY" else plan.entry_low
         rr = calc_rr(direction, entry_for_rr, plan.sl, plan.tp1)
@@ -668,6 +757,11 @@ def scan_setup_plan(
             sl        = float(plan.sl),
             tp1_rr    = tp1_rr,
         )
+
+        # SNR_BLOCKED = hard reject untuk setup plan
+        # Setup plan adalah antisipasi — kalau jalan terblokir SnR, lebih baik skip
+        if "SNR_BLOCKED" in conf_detail.get("snr_detail", ""):
+            continue
 
         results.append(Signal(
             symbol     = symbol,
@@ -694,7 +788,7 @@ def scan_setup_plan(
             confluence_score = conf_score,
             htf_bias         = bias_detail,
 
-            trigger_notes     = f"SETUP_PLAN via {required_htf}:{htf_bias}" + (f" | Fib={fib_anchor_name}@{fib_anchor:.2f}" if fib_anchor is not None else " | zona EMA50"),
+            trigger_notes     = f"SETUP_PLAN via {required_htf}:{htf_bias} | {zona_basis}",
             confluence_notes  = conf_notes,
             pattern_names     = conf_detail["pattern_names"],
             fib_detail        = conf_detail["fib_detail"],
@@ -744,6 +838,10 @@ def evaluate_any_tf_mta(
     scalping_min_confluence_score: int   = 1,
     scalping_sl_atr_mult:          float = 1.2,
     scalping_cooldown_bars:        int   = 5,
+    scalping_max_sl_points:        float = 5.0,
+    scalping_tp1_rr:               float = 1.5,
+    scalping_tp2_rr:               float = 2.0,
+    scalping_tp3_rr:               float = 2.5,
 ) -> Signal | None:
     """Evaluasi sinyal trading untuk satu (symbol, trigger_tf). Return Signal jika 5 gate lulus."""
     trigger_tf  = trigger_tf.upper()
@@ -779,11 +877,19 @@ def evaluate_any_tf_mta(
         base_confluence_score = scalping_min_confluence_score
         base_sl_atr_mult      = scalping_sl_atr_mult
         base_cooldown         = scalping_cooldown_bars
+        eff_tp1_rr            = scalping_tp1_rr
+        eff_tp2_rr            = scalping_tp2_rr
+        eff_tp3_rr            = scalping_tp3_rr
+        eff_max_sl_points     = scalping_max_sl_points
     else:
         base_trigger_score    = min_trigger_score
         base_confluence_score = min_confluence_score
         base_sl_atr_mult      = sl_atr_mult
         base_cooldown         = cooldown_bars
+        eff_tp1_rr            = tp1_rr
+        eff_tp2_rr            = tp2_rr
+        eff_tp3_rr            = tp3_rr
+        eff_max_sl_points     = max_sl_points
 
     market_cond = detect_market_condition(df_t)
     if market_cond == "volatile":
@@ -866,8 +972,8 @@ def evaluate_any_tf_mta(
     # GATE 4 & 5: SL/TP + Confluence + RR
     plan = dynamic_atr_sltp(
         direction=direction, price_now=price_now, atr=atr,
-        sl_atr_mult=eff_sl_atr_mult, tp1_rr=tp1_rr, tp2_rr=tp2_rr, tp3_rr=tp3_rr,
-        max_sl_points=max_sl_points,
+        sl_atr_mult=eff_sl_atr_mult, tp1_rr=eff_tp1_rr, tp2_rr=eff_tp2_rr, tp3_rr=eff_tp3_rr,
+        max_sl_points=eff_max_sl_points,
     )
     sl_method = "dynamic_atr"
     if plan is None:
@@ -885,11 +991,14 @@ def evaluate_any_tf_mta(
         df=df_t, direction=direction, entry=price_now, atr=atr,
         tf=trigger_tf, is_scalping=is_scalping, sl=float(plan.sl), tp1_rr=tp1_rr,
     )
-    if conf_score == -99:
-        _reject(df_t, f"SNR_BLOCKED_SCALPING [{conf_notes}]")
-        return None
     if conf_score < eff_confluence_score:
         _reject(df_t, f"CONFLUENCE_FAIL conf={conf_score}/{eff_confluence_score}[{conf_notes}] cond={market_cond}")
+        return None
+
+    # Filter tambahan untuk intraday: wajib ada Fibonacci kuat (38.2/50/61.8)
+    # Entry tanpa Fibonacci di H1/H4/D1 dianggap tidak presisi
+    if not is_scalping and not conf_detail.get("fib_detail"):
+        _reject(df_t, f"INTRADAY_NO_FIB [{conf_notes}]")
         return None
 
     entry_for_rr = plan.entry_high if direction == "BUY" else plan.entry_low
@@ -918,9 +1027,9 @@ def evaluate_any_tf_mta(
         rr         = float(rr),
         sl_method  = sl_method,
         atr_value  = float(atr),
-        tp1_rr     = float(tp1_rr),
-        tp2_rr     = float(tp2_rr),
-        tp3_rr     = float(tp3_rr),
+        tp1_rr     = float(eff_tp1_rr),
+        tp2_rr     = float(eff_tp2_rr),
+        tp3_rr     = float(eff_tp3_rr),
         trigger_score    = trig_score,
         trigger_max      = 6,
         confluence_score = conf_score,

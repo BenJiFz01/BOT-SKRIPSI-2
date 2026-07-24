@@ -26,6 +26,8 @@ from pathlib import Path
 
 import openpyxl
 from openpyxl.chart import BarChart, LineChart, PieChart, Reference
+from openpyxl.chart.series import SeriesLabel
+from openpyxl.chart.series import SeriesLabel
 from openpyxl.styles import (
     Alignment, Border, Font, PatternFill, Side
 )
@@ -294,11 +296,11 @@ def _sheet_ringkasan(wb, stats: dict, records: list[dict]) -> None:
     pie.width  = 14
     pie.height = 10
 
-    pie_data   = Reference(ws, min_col=9, min_row=pie_start,
-                              max_row=pie_start + 5)
+    pie_data       = Reference(ws, min_col=9, min_row=pie_start + 1,
+                                   max_row=pie_start + 5)
     pie_labels_ref = Reference(ws, min_col=8, min_row=pie_start + 1,
                                    max_row=pie_start + 5)
-    pie.add_data(pie_data, titles_from_data=True)
+    pie.add_data(pie_data, titles_from_data=False)
     pie.set_categories(pie_labels_ref)
     ws.add_chart(pie, "E14")
     by_tf    = stats.get("by_timeframe", {})
@@ -316,13 +318,15 @@ def _sheet_ringkasan(wb, stats: dict, records: list[dict]) -> None:
     n_tf = len(by_tf)
     if n_tf > 0:
         bar = BarChart()
-        bar.type    = "col"
-        bar.title   = "Win Rate per Timeframe (%)"
+        bar.type     = "col"
+        bar.grouping = "clustered"
+        bar.overlap  = 0
+        bar.title    = "Win Rate per Timeframe (%)"
         bar.y_axis.title = "Win Rate (%)"
         bar.x_axis.title = "Timeframe"
-        bar.style   = 10
-        bar.width   = 14
-        bar.height  = 10
+        bar.style    = 10
+        bar.width    = 14
+        bar.height   = 10
 
         bar_data   = Reference(ws, min_col=9, min_row=bar_start,
                                    max_row=bar_start + n_tf)
@@ -679,18 +683,16 @@ def _sheet_equity_curve(wb, records: list[dict]) -> None:
         chart.style         = 10
         chart.width         = 22
         chart.height        = 14
-        chart.y_axis.crossAx = 500
-        chart.x_axis.crossAx = 100
+        chart.grouping      = "standard"
 
-        # Data equity (kolom F, mulai baris 4)
-        data_ref = Reference(ws, min_col=6, min_row=3,
+        data_ref = Reference(ws, min_col=6, min_row=4,
                              max_row=3 + n_rows)
-        chart.add_data(data_ref, titles_from_data=True)
+        chart.add_data(data_ref, titles_from_data=False)
 
-        # Style garis: tebal, warna biru
         series = chart.series[0]
+        series.title = SeriesLabel(v="Equity")
         series.graphicalProperties.line.solidFill = "1F4E79"
-        series.graphicalProperties.line.width     = 25000  # 2.5pt
+        series.graphicalProperties.line.width     = 25000
 
         ws.add_chart(chart, "H3")
 

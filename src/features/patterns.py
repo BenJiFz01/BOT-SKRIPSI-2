@@ -35,6 +35,18 @@ PATTERN_FUNCS = {
     "CDLSPINNINGTOP":    talib.CDLSPINNINGTOP,
 }
 
+# Pattern netral — menunjukkan ketidakpastian, tidak masuk bull/bear count
+# Tetap dideteksi dan ditampilkan di notif tapi tidak menambah skor
+PATTERN_NEUTRAL = {
+    "CDLDOJI",
+    "CDLLONGLEGGEDDOJI",
+    "CDLDRAGONFLYDOJI",
+    "CDLGRAVESTONEDOJI",
+    "CDLSPINNINGTOP",
+    "CDLHARAMI",
+    "CDLHARAMICROSS",
+}
+
 
 def add_patterns(df: pd.DataFrame) -> pd.DataFrame:
     """Tambahkan kolom candlestick pattern ke DataFrame. Returns DataFrame baru dengan kolom pattern + agregasi."""
@@ -49,11 +61,12 @@ def add_patterns(df: pd.DataFrame) -> pd.DataFrame:
 
     for name, fn in PATTERN_FUNCS.items():
         df[name] = fn(o, h, l, c)
-        bull_cols.append((df[name] >= 100).astype(int))
-        bear_cols.append((df[name] <= -100).astype(int))
+        if name not in PATTERN_NEUTRAL:
+            bull_cols.append((df[name] >= 100).astype(int))
+            bear_cols.append((df[name] <= -100).astype(int))
 
-    df["pattern_bull_count"] = pd.concat(bull_cols, axis=1).sum(axis=1)
-    df["pattern_bear_count"] = pd.concat(bear_cols, axis=1).sum(axis=1)
+    df["pattern_bull_count"] = pd.concat(bull_cols, axis=1).sum(axis=1) if bull_cols else 0
+    df["pattern_bear_count"] = pd.concat(bear_cols, axis=1).sum(axis=1) if bear_cols else 0
     df["pattern_score"]      = df["pattern_bull_count"] - df["pattern_bear_count"]
 
     return df

@@ -85,8 +85,8 @@ def main() -> None:
 
     watcher = CandleCloseWatcher()
 
-    # Cooldown setup plan — hindari spam setup plan yang sama berulang
-    _setup_plan_sent: dict[tuple, str] = {}
+    # Cooldown setup plan — key=(symbol,tf,direction), value=datetime terakhir kirim
+    _setup_plan_sent: dict[tuple, object] = {}
 
     try:
         acc = connect(s.mt5_login, s.mt5_password, s.mt5_server)
@@ -134,6 +134,9 @@ def main() -> None:
                         last_events[tf_u] = event
 
                 # ── Proses setiap TF yang ada candle close ─────────────────
+                # Tracking sinyal live yang keluar di loop ini untuk deduplication setup plan
+                _live_signals_this_loop: set[tuple] = set()
+
                 for tf_u, event in last_events.items():
                     logger.info(f"[CLOSE] {symbol} {tf_u} | {event.closed_time}")
                     tf_u_norm  = tf_u.upper()
@@ -170,6 +173,10 @@ def main() -> None:
                         scalping_min_confluence_score = s.scalping_min_confluence_score,
                         scalping_sl_atr_mult          = s.scalping_sl_atr_mult,
                         scalping_cooldown_bars         = s.scalping_cooldown_bars,
+                        scalping_max_sl_points        = s.scalping_max_sl_points,
+                        scalping_tp1_rr               = s.scalping_tp1_rr,
+                        scalping_tp2_rr               = s.scalping_tp2_rr,
+                        scalping_tp3_rr               = s.scalping_tp3_rr,
                     )
 
                     if sig is None:
@@ -184,6 +191,9 @@ def main() -> None:
                             f"C={sig.confluence_score} mode={sig.signal_mode} "
                             f"trade={sig.trade_mode} ID={signal_id}"
                         )
+
+                        # Track untuk deduplication setup plan di loop ini
+                        _live_signals_this_loop.add((symbol, sig.tf, sig.direction))
 
                         # Tambah ke tracker untuk monitoring otomatis
                         rec = sig_logger.get_by_id(signal_id)
@@ -200,54 +210,69 @@ def main() -> None:
                             format_signal(sig, signal_id=signal_id),
                         )
 
-                # Scan setup plan jika ada candle M15 atau H1 yang baru close
-                has_anchor_close = any(tf in last_events for tf in ("M15", "H1"))
-                if has_anchor_close and data_by_tf:
+                # Scan setup plan setiap loop (tidak hanya saat candle close)
+                # agar notif keluar lebih awal sebelum harga sampai zona entry
+                # Cooldown per setup key = 15 menit agar tidak spam
+                if data_by_tf:
                     try:
-                        setups = scan_setup_plan(
-                            data_by_tf        = data_by_tf,
-                            symbol            = symbol,
-                            enabled_tfs       = s.timeframes,
-                            min_confirm_votes = s.min_confirm_votes,
-                            atr_min_pct       = s.atr_min_pct,
-                            sl_atr_mult       = s.sl_atr_mult,
-                            tp1_rr            = s.tp1_rr,
-                            tp2_rr            = s.tp2_rr,
-                            tp3_rr            = s.tp3_rr,
-                            max_sl_points     = s.max_sl_points,
-                            sl_pips           = s.sl_pips,
-                            tp1_pips          = s.tp1_pips,
-                            tp2_pips          = s.tp2_pips,
-                            tp3_pips          = s.tp3_pips,
-                            pip_size          = s.pip_size,
-                            session_filter    = s.session_filter,
-                        )
-                        for sp in setups:
-                            # Cooldown per (symbol, anchor_tf, direction, candle_time)
-                            sp_key  = (symbol, sp.tf, sp.direction)
-                            sp_last = _setup_plan_sent.get(sp_key, "")
-                            if sp_last == sp.close_time:
-                                continue   # sudah dikirim untuk candle ini
+                        import pytz as _pytz
+                        _now = __import__("datetime").datetime.now(_pytz.utc)
 
-                            _setup_plan_sent[sp_key] = sp.close_time
-                            logger.info(
-                                f"[SETUP PLAN] {sp.symbol} {sp.tf} {sp.direction} "
-                                f"({sp.trade_mode}) exec={sp.exec_tf} RR={sp.rr:.2f}"
+                        for _sp_scalping, _sp_anchor in [(True, "M15"), (False, "H1")]:
+                            if _sp_anchor not in data_by_tf:
+                                continue
+
+                            setups = scan_setup_plan(
+                                data_by_tf        = data_by_tf,
+                                symbol            = symbol,
+                                enabled_tfs       = s.timeframes,
+                                min_confirm_votes = s.min_confirm_votes,
+                                atr_min_pct       = s.atr_min_pct,
+                                sl_atr_mult       = s.scalping_sl_atr_mult if _sp_scalping else s.sl_atr_mult,
+                                tp1_rr            = s.scalping_tp1_rr if _sp_scalping else s.tp1_rr,
+                                tp2_rr            = s.scalping_tp2_rr if _sp_scalping else s.tp2_rr,
+                                tp3_rr            = s.scalping_tp3_rr if _sp_scalping else s.tp3_rr,
+                                max_sl_points     = s.scalping_max_sl_points if _sp_scalping else s.max_sl_points,
+                                sl_pips           = s.sl_pips,
+                                tp1_pips          = s.tp1_pips,
+                                tp2_pips          = s.tp2_pips,
+                                tp3_pips          = s.tp3_pips,
+                                pip_size          = s.pip_size,
+                                session_filter    = s.session_filter,
                             )
-                            # Log setup plan ke CSV/JSON
-                            sp_id = sig_logger.log_signal(sp)
-                            # Tambah ke tracker untuk monitoring otomatis
-                            sp_rec = sig_logger.get_by_id(sp_id)
-                            if sp_rec:
-                                tracker.add_signal(sp_rec)
-                            # Kirim ke Telegram
-                            send_message(
-                                s.telegram_token,
-                                s.telegram_chat_id,
-                                format_signal(sp, signal_id=sp_id),
-                            )
-                            # Update laporan Excel
-                            _refresh_report(sig_logger)
+                            for sp in setups:
+                                sp_key      = (symbol, sp.tf, sp.direction)
+                                sp_last_dt  = _setup_plan_sent.get(sp_key)
+
+                                # Skip jika live signal arah+TF sama sudah keluar di loop ini
+                                if sp_key in _live_signals_this_loop:
+                                    logger.debug(
+                                        f"[SETUP SKIP] {sp.symbol} {sp.tf} {sp.direction} "
+                                        f"— live signal sudah keluar loop ini"
+                                    )
+                                    continue
+
+                                # Cooldown 15 menit per (symbol, tf, direction)
+                                if sp_last_dt is not None:
+                                    elapsed = (_now - sp_last_dt).total_seconds() / 60
+                                    if elapsed < 15:
+                                        continue
+
+                                _setup_plan_sent[sp_key] = _now
+                                logger.info(
+                                    f"[SETUP PLAN] {sp.symbol} {sp.tf} {sp.direction} "
+                                    f"({sp.trade_mode}) exec={sp.exec_tf} RR={sp.rr:.2f}"
+                                )
+                                sp_id = sig_logger.log_signal(sp)
+                                sp_rec = sig_logger.get_by_id(sp_id)
+                                if sp_rec:
+                                    tracker.add_signal(sp_rec)
+                                send_message(
+                                    s.telegram_token,
+                                    s.telegram_chat_id,
+                                    format_signal(sp, signal_id=sp_id),
+                                )
+                                _refresh_report(sig_logger)
                     except Exception as e:
                         logger.debug(f"Setup plan scan error: {e}")
 

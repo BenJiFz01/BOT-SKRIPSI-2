@@ -10,17 +10,16 @@ from pathlib import Path
 from src.models.signal import Signal
 
 
+LOG_DIR   = Path("logs")
+CSV_PATH  = LOG_DIR / "signal_history.csv"
+JSON_PATH = LOG_DIR / "signal_history.json"
+
 _WIB = timezone(timedelta(hours=7))
 
 
 def _now_wib() -> str:
     """Waktu sekarang dalam WIB (UTC+7), format ISO tanpa timezone suffix."""
     return datetime.now(tz=_WIB).strftime("%Y-%m-%dT%H:%M:%S")
-
-
-LOG_DIR   = Path("logs")
-CSV_PATH  = LOG_DIR / "signal_history.csv"
-JSON_PATH = LOG_DIR / "signal_history.json"
 
 CSV_FIELDS = [
     "signal_id", "timestamp", "symbol", "timeframe", "direction",
@@ -223,7 +222,7 @@ class SignalLogger:
         return list(self._load().values())
 
     def get_pending(self) -> list[dict]:
-        """Sinyal aktif PENDING (bukan setup plan) untuk dimonitor tracker."""
+        """Sinyal aktif PENDING untuk dimonitor tracker."""
         return [r for r in self.get_all_records() if r.get("outcome") == "PENDING"]
 
     def get_trackable(self) -> list[dict]:
@@ -247,8 +246,8 @@ class SignalLogger:
             return {"total": 0, "win": 0, "loss": 0, "pending": 0}
 
         for rec in self.get_all_records():
-            # Skip setup plan dari statistik
-            if rec.get("is_setup_plan") or rec.get("outcome") == "SETUP":
+            # Skip sinyal yang masih SETUP (belum ada outcome)
+            if rec.get("outcome") == "SETUP":
                 continue
 
             outcome = rec.get("outcome", "PENDING")

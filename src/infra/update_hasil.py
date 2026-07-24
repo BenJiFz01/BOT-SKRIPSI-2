@@ -1,4 +1,4 @@
-﻿"""update_hasil.py — CLI interaktif untuk update hasil sinyal (WIN/LOSS).
+"""update_hasil.py — CLI interaktif untuk update hasil sinyal (WIN/LOSS).
 
 Jalankan: python -m src.infra.update_hasil
 """

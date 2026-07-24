@@ -31,17 +31,20 @@ def _get(name: str, default: str | None = None) -> str:
         raise ValueError(f"Env var wajib tidak ditemukan: {name}")
     return str(v).strip()
 
+
 def _getf(name: str, default: float) -> float:
     try:
         return float(os.getenv(name, str(default)))
     except ValueError:
         raise ValueError(f"{name} harus float, dapat: '{os.getenv(name)}'")
 
+
 def _geti(name: str, default: int) -> int:
     try:
         return int(os.getenv(name, str(default)))
     except ValueError:
         raise ValueError(f"{name} harus int, dapat: '{os.getenv(name)}'")
+
 
 def _getb(name: str, default: bool) -> bool:
     return os.getenv(name, str(default)).strip().lower() in ("1", "true", "yes", "on")
@@ -92,6 +95,10 @@ class Settings:
     scalping_min_confluence_score: int
     scalping_sl_atr_mult:          float
     scalping_cooldown_bars:        int
+    scalping_max_sl_points:        float
+    scalping_tp1_rr:               float
+    scalping_tp2_rr:               float
+    scalping_tp3_rr:               float
 
 def load_settings() -> Settings:
     symbols = [s.strip() for s in _get("SYMBOLS", "XAUUSD").split(",") if s.strip()]
@@ -144,4 +151,8 @@ def load_settings() -> Settings:
         scalping_min_confluence_score = _geti("SCALPING_MIN_CONFLUENCE_SCORE", 1),
         scalping_sl_atr_mult          = _getf("SCALPING_SL_ATR_MULT",          1.2),
         scalping_cooldown_bars        = _geti("SCALPING_COOLDOWN_BARS",        5),
+        scalping_max_sl_points        = _getf("SCALPING_MAX_SL_POINTS",        5.0),
+        scalping_tp1_rr               = _getf("SCALPING_TP1_RR",               1.5),
+        scalping_tp2_rr               = _getf("SCALPING_TP2_RR",               2.0),
+        scalping_tp3_rr               = _getf("SCALPING_TP3_RR",               2.5),
     )

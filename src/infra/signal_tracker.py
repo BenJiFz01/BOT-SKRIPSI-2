@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import threading
 from dataclasses import dataclass
-from datetime import datetime, timezone, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Callable
 
 from loguru import logger
@@ -19,11 +19,15 @@ class TrackedSignal:
     symbol:     str
     direction:  str
     entry:      float
+    entry_low:  float
+    entry_high: float
     sl:         float
     tp1:        float
     tp2:        float | None
     tp3:        float | None
     start_time: datetime
+    is_setup_plan:    bool = False
+    entry_zone_hit:   bool = False   # True setelah harga masuk entry zone (untuk setup plan)
     tp1_hit:    bool = False
     tp2_hit:    bool = False
     tp3_hit:    bool = False
@@ -74,20 +78,28 @@ class SignalTracker:
         sid = rec.get("signal_id", "")
         if not sid or float(rec.get("sl", 0) or 0) == 0:
             return
+        is_setup = str(rec.get("is_setup_plan", "False")).lower() in ("true", "1", "yes")
+        entry     = float(rec.get("entry",      0) or 0)
+        entry_low = float(rec.get("entry_low",  0) or 0) or entry
+        entry_high= float(rec.get("entry_high", 0) or 0) or entry
         ts = TrackedSignal(
-            signal_id  = sid,
-            symbol     = rec.get("symbol", "XAUUSD"),
-            direction  = rec.get("direction", "BUY"),
-            entry      = float(rec.get("entry", 0) or 0),
-            sl         = float(rec.get("sl",    0) or 0),
-            tp1        = float(rec.get("tp1",   0) or 0),
-            tp2        = float(rec.get("tp2",   0) or 0) or None,
-            tp3        = float(rec.get("tp3",   0) or 0) or None,
-            start_time = _parse_dt(rec.get("timestamp", "")),
+            signal_id   = sid,
+            symbol      = rec.get("symbol", "XAUUSD"),
+            direction   = rec.get("direction", "BUY"),
+            entry       = entry,
+            entry_low   = entry_low,
+            entry_high  = entry_high,
+            sl          = float(rec.get("sl",    0) or 0),
+            tp1         = float(rec.get("tp1",   0) or 0),
+            tp2         = float(rec.get("tp2",   0) or 0) or None,
+            tp3         = float(rec.get("tp3",   0) or 0) or None,
+            start_time  = _parse_dt(rec.get("timestamp", "")),
+            is_setup_plan   = is_setup,
+            entry_zone_hit  = not is_setup,  # live signal langsung aktif, setup plan tunggu zona
         )
         with self._lock:
             self._active[sid] = ts
-        logger.debug(f"SignalTracker.add | {sid} | {ts.direction} @ {ts.entry}")
+        logger.debug(f"SignalTracker.add | {sid} | {ts.direction} @ {ts.entry} | setup={is_setup}")
 
     def get_active_count(self) -> int:
         with self._lock:
@@ -152,6 +164,21 @@ class SignalTracker:
         if (now - ts.start_time).total_seconds() / 3600 > self._max_hours:
             self._resolve(ts, "CANCELLED", (bid + ask) / 2, now, "EXPIRED")
             return
+
+        # Setup plan: tunggu harga masuk entry zone dulu sebelum monitor TP/SL
+        # Entry zone = antara entry_low dan entry_high
+        if not ts.entry_zone_hit:
+            price_mid = (bid + ask) / 2
+            in_zone = ts.entry_low <= price_mid <= ts.entry_high
+            if in_zone:
+                ts.entry_zone_hit = True
+                logger.info(f"[TRACKER] Entry zone hit | {ts.signal_id} | price={price_mid:.2f} zone={ts.entry_low:.2f}-{ts.entry_high:.2f}")
+            else:
+                # Belum masuk zona — cek apakah SL sudah tersentuh sebelum zona (sinyal batal)
+                sl_before_entry = (is_buy and check_price <= ts.sl) or (not is_buy and check_price >= ts.sl)
+                if sl_before_entry:
+                    self._resolve(ts, "CANCELLED", check_price, now, "SL_BEFORE_ENTRY")
+                return  # belum masuk zona, belum monitor TP
 
         sl_hit = (is_buy and check_price <= ts.sl) or (not is_buy and check_price >= ts.sl)
 
