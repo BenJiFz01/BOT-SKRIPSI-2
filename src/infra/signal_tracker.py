@@ -1,16 +1,16 @@
-"""signal_tracker.py — Background thread monitoring TP/SL real-time."""
-from __future__ import annotations
+﻿"""signal_tracker.py — Background thread monitoring TP/SL real-time."""
 
 import threading
 from dataclasses import dataclass
-from datetime import datetime, timedelta, timezone
+from datetime import datetime
 from typing import Callable
 
 from loguru import logger
 
+from src.utils.time_utils import TZ_WIB, parse_dt_safe
+
 POLL_INTERVAL  = 10
 MAX_DURATION_H = 48
-_WIB = timezone(timedelta(hours=7))
 
 
 @dataclass
@@ -26,8 +26,9 @@ class TrackedSignal:
     tp2:        float | None
     tp3:        float | None
     start_time: datetime
-    is_setup_plan:    bool = False
-    entry_zone_hit:   bool = False   # True setelah harga masuk entry zone (untuk setup plan)
+    atr_value:      float = 0.0
+    is_setup_plan:  bool  = False
+    entry_zone_hit: bool  = False
     tp1_hit:    bool = False
     tp2_hit:    bool = False
     tp3_hit:    bool = False
@@ -78,10 +79,11 @@ class SignalTracker:
         sid = rec.get("signal_id", "")
         if not sid or float(rec.get("sl", 0) or 0) == 0:
             return
-        is_setup = str(rec.get("is_setup_plan", "False")).lower() in ("true", "1", "yes")
-        entry     = float(rec.get("entry",      0) or 0)
-        entry_low = float(rec.get("entry_low",  0) or 0) or entry
-        entry_high= float(rec.get("entry_high", 0) or 0) or entry
+        is_setup   = str(rec.get("is_setup_plan", "False")).lower() in ("true", "1", "yes")
+        entry      = float(rec.get("entry",      0) or 0)
+        entry_low  = float(rec.get("entry_low",  0) or 0) or entry
+        entry_high = float(rec.get("entry_high", 0) or 0) or entry
+        atr_value  = float(rec.get("atr_value",  0) or 0)
         ts = TrackedSignal(
             signal_id   = sid,
             symbol      = rec.get("symbol", "XAUUSD"),
@@ -93,30 +95,18 @@ class SignalTracker:
             tp1         = float(rec.get("tp1",   0) or 0),
             tp2         = float(rec.get("tp2",   0) or 0) or None,
             tp3         = float(rec.get("tp3",   0) or 0) or None,
-            start_time  = _parse_dt(rec.get("timestamp", "")),
+            start_time  = parse_dt_safe(rec.get("timestamp", "")),
+            atr_value   = atr_value,
             is_setup_plan   = is_setup,
-            entry_zone_hit  = not is_setup,  # live signal langsung aktif, setup plan tunggu zona
+            entry_zone_hit  = not is_setup,
         )
         with self._lock:
             self._active[sid] = ts
-        logger.debug(f"SignalTracker.add | {sid} | {ts.direction} @ {ts.entry} | setup={is_setup}")
+        logger.debug(f"SignalTracker.add | {sid} | {ts.direction} @ {ts.entry} | setup={is_setup} atr={atr_value:.4f}")
 
     def get_active_count(self) -> int:
         with self._lock:
             return len(self._active)
-
-    def get_active_summary(self) -> list[dict]:
-        with self._lock:
-            return [
-                {
-                    "signal_id": ts.signal_id, "symbol": ts.symbol,
-                    "direction": ts.direction, "entry": ts.entry,
-                    "sl": ts.sl, "tp1": ts.tp1, "tp2": ts.tp2, "tp3": ts.tp3,
-                    "tp1_hit": ts.tp1_hit, "tp2_hit": ts.tp2_hit, "tp3_hit": ts.tp3_hit,
-                    "since": ts.start_time.isoformat(),
-                }
-                for ts in self._active.values()
-            ]
 
     def _load_pending_from_logger(self) -> None:
         try:
@@ -131,32 +121,64 @@ class SignalTracker:
     def _run(self) -> None:
         while not self._stop.is_set():
             try:
-                self._check_all()
+                next_interval = self._check_all()
             except Exception as e:
                 logger.error(f"SignalTracker error: {e}")
-            self._stop.wait(timeout=self._poll_interval)
+                next_interval = self._poll_interval
+            self._stop.wait(timeout=next_interval)
 
-    def _check_all(self) -> None:
+    def _check_all(self) -> float:
+        """Check semua sinyal aktif. Returns interval poll berikutnya (adaptive)."""
         with self._lock:
             ids = list(self._active.keys())
+
+        min_interval = self._poll_interval  # default 10 detik
+        prices_cache: dict[str, tuple[float, float]] = {}
 
         for sid in ids:
             with self._lock:
                 ts = self._active.get(sid)
             if ts is None or ts.resolved:
                 continue
-            try:
-                bid, ask = self._get_price(ts.symbol)
-            except Exception:
+
+            # Cache harga per symbol agar tidak double-call MT5
+            sym = ts.symbol
+            if sym not in prices_cache:
+                try:
+                    bid, ask = self._get_price(sym)
+                    if bid > 0 and ask > 0:
+                        prices_cache[sym] = (bid, ask)
+                except Exception:
+                    continue
+
+            bid, ask = prices_cache.get(sym, (0.0, 0.0))
+            if bid <= 0 or ask <= 0:
                 continue
-            if bid > 0 and ask > 0:
-                self._evaluate(ts, bid, ask)
+
+            self._evaluate(ts, bid, ask)
+
+            # Adaptive interval: cek seberapa dekat harga ke TP1 atau SL
+            if not ts.resolved:
+                check_price = bid if ts.direction == "BUY" else ask
+                atr_est = ts.atr_value if hasattr(ts, "atr_value") and ts.atr_value > 0 else 5.0
+                dist_tp = abs(check_price - ts.tp1) if ts.tp1 > 0 else 999
+                dist_sl = abs(check_price - ts.sl)
+                min_dist = min(dist_tp, dist_sl)
+
+                if min_dist <= atr_est * 0.5:
+                    min_interval = min(min_interval, 1)   # sangat dekat → 1 detik
+                elif min_dist <= atr_est * 1.5:
+                    min_interval = min(min_interval, 3)   # agak dekat → 3 detik
+                else:
+                    min_interval = min(min_interval, 10)  # masih jauh → 10 detik
 
         with self._lock:
             self._active = {k: v for k, v in self._active.items() if not v.resolved}
 
+        return max(1, min_interval)  # minimum 1 detik
+
     def _evaluate(self, ts: TrackedSignal, bid: float, ask: float) -> None:
-        now        = datetime.now(tz=_WIB)
+        now        = datetime.now(tz=TZ_WIB)
         is_buy     = ts.direction == "BUY"
         check_price = bid if is_buy else ask
 
@@ -218,44 +240,51 @@ class SignalTracker:
             self._resolve(ts, "WIN_TP2", check_price, now)
 
     def _send_tp_notify(self, header: str, signal_id: str, price: float) -> None:
-        """Kirim notif TP hanya untuk sinyal baru (bukan dari startup)."""
+        """Kirim notif TP hanya untuk sinyal baru (bukan dari startup), langsung tanpa blocking."""
         if self._notify and signal_id not in self._startup_signal_ids:
-            self._notify(f"{header}\nID: <code>{signal_id}</code>\nHarga: <code>{price:.2f}</code>")
+            msg = f"{header}\nID: <code>{signal_id}</code>\nHarga: <code>{price:.2f}</code>"
+            threading.Thread(
+                target=self._notify, args=(msg,), name="TrackerNotify", daemon=True
+            ).start()
 
     def _resolve(self, ts: TrackedSignal, outcome: str, price: float, now: datetime, reason: str = "") -> None:
         ts.resolved  = True
         duration_m   = int((now - ts.start_time).total_seconds() / 60)
-        self._logger.update_outcome(
-            ts.signal_id, outcome,
-            price=price, notes=reason or "Auto-detected by SignalTracker", duration_m=duration_m,
-        )
-        emoji = {"WIN_TP1": "✅", "WIN_TP2": "✅✅", "WIN_TP3": "✅✅✅", "LOSS": "❌", "CANCELLED": "⚠️"}.get(outcome, "")
+        emoji  = {"WIN_TP1": "✅", "WIN_TP2": "✅✅", "WIN_TP3": "✅✅✅", "LOSS": "❌", "CANCELLED": "⚠️"}.get(outcome, "")
+        is_new = ts.signal_id not in self._startup_signal_ids
+
         logger.success(f"[TRACKER] {outcome} | {ts.signal_id} | price={price:.2f} | duration={duration_m}m")
 
-        is_new = ts.signal_id not in self._startup_signal_ids
+        # ── 1. Kirim Telegram DULU sebelum I/O ─────────────────────────────
+        # Supaya notif sampai detik itu juga, tidak tertahan operasi file
         if self._notify and outcome != "CANCELLED" and is_new:
-            self._notify(
-                f"{emoji} <b>{outcome}</b>\n"
-                f"ID: <code>{ts.signal_id}</code>\n"
-                f"Harga resolve: <code>{price:.2f}</code>\n"
-                f"Durasi: <code>{duration_m} menit</code>\n"
-                f"Pips: <code>{abs(price - ts.entry):.1f}</code>"
-            )
-
-        if self._refresh_report:
             try:
-                self._refresh_report()
-            except PermissionError:
-                logger.debug("Tracker report skip: file dibuka di Excel")
+                self._notify(
+                    f"{emoji} <b>{outcome}</b>\n"
+                    f"ID: <code>{ts.signal_id}</code>\n"
+                    f"Harga: <code>{price:.2f}</code>\n"
+                    f"Durasi: <code>{duration_m} menit</code>\n"
+                    f"Pips: <code>{abs(price - ts.entry):.1f}</code>"
+                )
             except Exception as e:
-                logger.debug(f"Tracker report refresh error: {e}")
+                logger.warning(f"Tracker notify error: {e}")
 
+        # ── 2. Simpan ke file (JSON + CSV) di thread terpisah ──────────────
+        # I/O tidak memblokir loop tracker — polling tetap jalan normal
+        def _save_async() -> None:
+            try:
+                self._logger.update_outcome(
+                    ts.signal_id, outcome,
+                    price=price, notes=reason or "Auto-detected by SignalTracker", duration_m=duration_m,
+                )
+            except Exception as e:
+                logger.warning(f"Tracker save error: {e}")
+            if self._refresh_report:
+                try:
+                    self._refresh_report()
+                except PermissionError:
+                    logger.debug("Tracker report skip: file dibuka di Excel")
+                except Exception as e:
+                    logger.debug(f"Tracker report refresh error: {e}")
 
-def _parse_dt(s: str) -> datetime:
-    try:
-        dt = datetime.fromisoformat(s.replace("Z", "+00:00"))
-        if dt.tzinfo is None:
-            dt = dt.replace(tzinfo=_WIB)
-        return dt
-    except Exception:
-        return datetime.now(tz=_WIB)
+        threading.Thread(target=_save_async, name="TrackerSave", daemon=True).start()

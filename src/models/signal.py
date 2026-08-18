@@ -1,5 +1,4 @@
-"""signal.py — Model data sinyal trading output dari DSS engine."""
-from __future__ import annotations
+﻿"""signal.py — Model data sinyal trading output dari DSS engine."""
 
 from typing import Literal
 from pydantic import BaseModel
@@ -30,7 +29,7 @@ class Signal(BaseModel):
     trigger_score:    int = 0
     trigger_max:      int = 6
     confluence_score: int = 0
-    confluence_max:   int = 5
+    confluence_max:   int = 7   # maks aktual: Pattern(2)+Div(1)+Fib(2)+SnR(1)+SnD(1)
     htf_bias:         str = ""
 
     trigger_notes:     str   = ""
@@ -47,3 +46,4 @@ class Signal(BaseModel):
     trade_mode:    str  = "intraday"
     is_setup_plan: bool = False
     exec_tf:       str  = ""
+    reason:        str  = ""   # alasan/label internal, dipakai oleh setup plan

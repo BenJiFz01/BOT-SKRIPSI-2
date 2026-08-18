@@ -1,57 +1,46 @@
-"""indicators.py — Kalkulasi indikator teknikal pada DataFrame OHLCV."""
-from __future__ import annotations
+﻿"""indicators.py — Tambahkan semua indikator teknikal ke DataFrame OHLC."""
 
 import numpy as np
 import pandas as pd
 import talib
 
-from src.features.divergence import detect_rsi_divergence, detect_macd_divergence
+from src.features.divergence import detect_macd_divergence, detect_rsi_divergence
 
 
 def add_indicators(df: pd.DataFrame) -> pd.DataFrame:
-    """Tambahkan RSI, MACD, EMA 20/50/200, ATR, EMA signals, dan divergence ke DataFrame."""
-    df    = df.copy()
-    close = df["close"].astype(float).to_numpy()
-    high  = df["high"].astype(float).to_numpy()
-    low   = df["low"].astype(float).to_numpy()
+    """Hitung dan tambahkan kolom indikator ke DataFrame. Returns DataFrame yang sama (in-place)."""
+    c = df["close"].to_numpy(dtype=float)
+    h = df["high"].to_numpy(dtype=float)
+    l = df["low"].to_numpy(dtype=float)
 
-    # Indikator dasar
-    df["rsi_14"]     = talib.RSI(close, timeperiod=14)
-    macd, sig, hist  = talib.MACD(close, fastperiod=12, slowperiod=26, signalperiod=9)
-    df["macd"]       = macd
-    df["macdsignal"] = sig
-    df["macdhist"]   = hist
-    df["ema_20"]     = talib.EMA(close, timeperiod=20)
-    df["ema_50"]     = talib.EMA(close, timeperiod=50)
-    df["ema_200"]    = talib.EMA(close, timeperiod=200)
-    df["atr_14"]     = talib.ATR(high, low, close, timeperiod=14)
+    df["ema_20"]  = talib.EMA(c, timeperiod=20)
+    df["ema_50"]  = talib.EMA(c, timeperiod=50)
+    df["ema_200"] = talib.EMA(c, timeperiod=200)
+    df["rsi_14"]  = talib.RSI(c, timeperiod=14)
+    df["atr_14"]  = talib.ATR(h, l, c, timeperiod=14)
+
+    macd, signal, hist = talib.MACD(c, fastperiod=12, slowperiod=26, signalperiod=9)
+    df["macd"]     = macd
+    df["signal"]   = signal
+    df["macdhist"] = hist
+
+    rsi = df["rsi_14"].to_numpy(dtype=float)
+    df["rsi_bull_div"], df["rsi_bear_div"] = detect_rsi_divergence(c, rsi)
+    df["macd_bull_div"], df["macd_bear_div"] = detect_macd_divergence(c, hist)
 
     # EMA cross (golden/death cross)
-    ema50, ema200 = df["ema_50"].to_numpy(), df["ema_200"].to_numpy()
-    gc = np.zeros(len(df), dtype=bool)
-    dc = np.zeros(len(df), dtype=bool)
+    ema50  = df["ema_50"].to_numpy(dtype=float)
+    ema200 = df["ema_200"].to_numpy(dtype=float)
+    golden = np.zeros(len(df), dtype=bool)
+    death  = np.zeros(len(df), dtype=bool)
     for i in range(1, len(df)):
-        if any(np.isnan([ema50[i], ema200[i], ema50[i-1], ema200[i-1]])):
+        if np.isnan(ema50[i]) or np.isnan(ema200[i]):
             continue
-        if ema50[i] > ema200[i] and ema50[i-1] <= ema200[i-1]:
-            gc[i] = True
-        if ema50[i] < ema200[i] and ema50[i-1] >= ema200[i-1]:
-            dc[i] = True
-    df["golden_cross"] = gc
-    df["death_cross"]  = dc
-
-    # EMA alignment dan trend
-    df["ema_bull_align"] = (df["ema_20"] > df["ema_50"]) & (df["ema_50"] > df["ema_200"])
-    df["ema_bear_align"] = (df["ema_20"] < df["ema_50"]) & (df["ema_50"] < df["ema_200"])
-    df["trend_bull"]     = (df["ema_50"] > df["ema_200"]) & (df["close"] > df["ema_200"])
-    df["trend_bear"]     = (df["ema_50"] < df["ema_200"]) & (df["close"] < df["ema_200"])
-
-    # Divergence
-    rsi_bull, rsi_bear   = detect_rsi_divergence(close, df["rsi_14"].to_numpy())
-    macd_bull, macd_bear = detect_macd_divergence(close, df["macdhist"].to_numpy())
-    df["rsi_bull_div"]   = rsi_bull
-    df["rsi_bear_div"]   = rsi_bear
-    df["macd_bull_div"]  = macd_bull
-    df["macd_bear_div"]  = macd_bear
+        if ema50[i] > ema200[i] and ema50[i - 1] <= ema200[i - 1]:
+            golden[i] = True
+        elif ema50[i] < ema200[i] and ema50[i - 1] >= ema200[i - 1]:
+            death[i] = True
+    df["golden_cross"] = golden
+    df["death_cross"]  = death
 
     return df

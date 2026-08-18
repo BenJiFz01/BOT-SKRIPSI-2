@@ -1,12 +1,13 @@
-"""session.py — Filter sesi trading XAU/USD (WIB/UTC+7)."""
-from __future__ import annotations
+﻿"""session.py — Filter sesi trading XAU/USD (WIB/UTC+7)."""
 
 from datetime import datetime, time
 
 import pytz
 
+from src.utils.time_utils import to_wib
 
-_TZ_WIB = pytz.timezone("Asia/Jakarta")
+
+_TZ_UTC = pytz.utc
 
 # Timeframe yang tidak difilter sesi
 _UNFILTERED_TFS = {"H4", "D1"}
@@ -19,12 +20,6 @@ _LONDON_END   = time(23, 0)
 _NY_START     = time(19, 0)
 _NY_END       = time(2,  0)   # melewati tengah malam
 
-
-def _to_wib(dt: datetime) -> datetime:
-    """Konversi datetime ke WIB (UTC+7)."""
-    if dt.tzinfo is None:
-        dt = pytz.utc.localize(dt)
-    return dt.astimezone(_TZ_WIB)
 
 def _in_asian(t: time) -> bool:
     return _ASIAN_START <= t <= _ASIAN_END
@@ -49,15 +44,15 @@ def is_active_session(dt: datetime | None = None, tf: str = "M5") -> bool:
 
     Returns:
         True jika TF tidak difilter (H4/D1) ATAU jam saat ini dalam
-        Asian (06:00-09:00) / London / NY session.
+        Asian / London / NY session.
     """
     if tf.upper() in _UNFILTERED_TFS:
         return True
 
     if dt is None:
-        dt = datetime.now(pytz.utc)
+        dt = datetime.now(_TZ_UTC)
 
-    t = _to_wib(dt).time()
+    t = to_wib(dt).time()
     return _in_asian(t) or _in_london(t) or _in_ny(t)
 
 
@@ -69,13 +64,13 @@ def session_name(dt: datetime | None = None) -> str:
         "Overlap L+NY", "London", "New York", "Asian", atau "Off".
     """
     if dt is None:
-        dt = datetime.now(pytz.utc)
+        dt = datetime.now(_TZ_UTC)
 
-    t      = _to_wib(dt).time()
-    in_a   = _in_asian(t)
-    in_l   = _in_london(t)
-    in_n   = _in_ny(t)
-    in_ov  = time(19, 0) <= t <= time(22, 0)
+    t     = to_wib(dt).time()
+    in_a  = _in_asian(t)
+    in_l  = _in_london(t)
+    in_n  = _in_ny(t)
+    in_ov = time(19, 0) <= t <= time(22, 0)
 
     if in_ov:
         return "Overlap L+NY"

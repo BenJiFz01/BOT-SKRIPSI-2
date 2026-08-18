@@ -1,1 +1,1 @@
-# src.notify package
+"""notify — Pengiriman notifikasi ke Telegram."""

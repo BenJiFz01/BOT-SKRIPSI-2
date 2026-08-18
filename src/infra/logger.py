@@ -1,41 +1,49 @@
-"""logger.py — Setup loguru untuk logging ke konsol dan file."""
-from __future__ import annotations
+﻿"""logger.py — Konfigurasi loguru untuk console dan file."""
 
 import sys
 from pathlib import Path
 
 from loguru import logger
 
+LOG_FILE = Path("logs/app.log")
 
-def setup_logger() -> None:
-    """Setup logger: konsol INFO+, file DEBUG+ (rotasi 5 MB, retensi 7 hari)."""
-    Path("logs").mkdir(parents=True, exist_ok=True)
+# Format console — lebih ringkas, tanpa nama modul
+_FMT_CONSOLE = (
+    "<green>{time:HH:mm:ss}</green> "
+    "| <level>{level:<8}</level> "
+    "| {message}"
+)
+
+# Format file — lengkap dengan nama modul dan baris untuk debugging
+_FMT_FILE = (
+    "{time:YYYY-MM-DD HH:mm:ss} "
+    "| {level:<8} "
+    "| {name}:{line} "
+    "| {message}"
+)
+
+
+def setup_logger(console_level: str = "INFO") -> None:
+    """
+    Inisialisasi loguru.
+    - Console : level INFO ke atas (WARNING, ERROR, SUCCESS tampil berwarna)
+    - File     : level DEBUG ke atas, rotasi harian, retensi 7 hari
+    Detail reject reason (level DEBUG) hanya masuk ke file, tidak bising di terminal.
+    """
+    LOG_FILE.parent.mkdir(parents=True, exist_ok=True)
     logger.remove()
 
     logger.add(
-        sys.stdout,
-        level="INFO",
-        format=(
-            "<green>{time:YYYY-MM-DD HH:mm:ss}</green> | "
-            "<level>{level: <8}</level> | "
-            "<cyan>{module}</cyan>:<cyan>{line}</cyan> - "
-            "<level>{message}</level>"
-        ),
+        sys.stderr,
+        level   = console_level,
+        format  = _FMT_CONSOLE,
+        colorize= True,
     )
-
     logger.add(
-        "logs/app.log",
-        level="DEBUG",
-        rotation="5 MB",
-        retention="7 days",
-        enqueue=True,
-        backtrace=True,
-        diagnose=False,
-        encoding="utf-8",
-        format=(
-            "{time:YYYY-MM-DD HH:mm:ss} | "
-            "{level: <8} | "
-            "{module}:{line} - "
-            "{message}"
-        ),
+        LOG_FILE,
+        level    = "DEBUG",
+        rotation = "1 day",
+        retention= "7 days",
+        format   = _FMT_FILE,
+        encoding = "utf-8",
     )

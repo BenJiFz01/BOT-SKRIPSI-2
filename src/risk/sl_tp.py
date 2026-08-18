@@ -1,12 +1,20 @@
-"""sl_tp.py — Kalkulasi Stop Loss dan Take Profit."""
-from __future__ import annotations
+﻿"""sl_tp.py — Kalkulasi Stop Loss dan Take Profit."""
 
 import math
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+
+
+def _validate_prices(*values: float) -> bool:
+    """Validasi bahwa semua nilai harga adalah finite dan positif."""
+    return all(math.isfinite(v) and v > 0 for v in values)
 
 
 @dataclass
 class SLTPlan:
+    """
+    Hasil kalkulasi SL/TP — digunakan oleh dynamic ATR maupun fixed pip.
+    Field `method` menyimpan label sumber ('dynamic_atr' / 'fixed').
+    """
     entry_low:  float
     entry_high: float
     sl:         float
@@ -14,28 +22,11 @@ class SLTPlan:
     tp2:        float
     tp3:        float
     method:     str
-    atr_used:   float
-    sl_dist:    float
-    rr_tp1:     float
-    rr_tp2:     float
-    rr_tp3:     float
-
-
-@dataclass
-class FixedZonePlan:
-    """Fallback plan jika ATR tidak valid."""
-    entry_low:  float
-    entry_high: float
-    sl:         float
-    tp1:        float
-    tp2:        float
-    tp3:        float
-    method:     str
-    atr_used:   float = 0.0
-    sl_dist:    float = 0.0
-    rr_tp1:     float = 0.0
-    rr_tp2:     float = 0.0
-    rr_tp3:     float = 0.0
+    atr_used:   float = field(default=0.0)
+    sl_dist:    float = field(default=0.0)
+    rr_tp1:     float = field(default=0.0)
+    rr_tp2:     float = field(default=0.0)
+    rr_tp3:     float = field(default=0.0)
 
 
 def dynamic_atr_sltp(
@@ -49,17 +40,19 @@ def dynamic_atr_sltp(
     entry_atr_frac: float = 0.2,
     max_sl_pct:     float = 0.015,
     min_sl_pct:     float = 0.001,
-    max_sl_points:  float = 50.0,
+    max_sl_points:  float = 0.0,
 ) -> SLTPlan | None:
-    """SL/TP adaptif berbasis ATR. SL = min(ATR-based, max_sl_points). TP dihitung dari sl_dist."""
+    """
+    SL/TP adaptif berbasis ATR.
+    Jika max_sl_points > 0, SL di-cap pada nilai tersebut.
+    TP dihitung dari sl_dist × RR.
+    """
     try:
         p, a, slm, ez = float(price_now), float(atr), float(sl_atr_mult), float(entry_atr_frac)
     except Exception:
         return None
 
-    if not all(math.isfinite(x) for x in [p, a, slm, ez]):
-        return None
-    if p <= 0 or a <= 0 or slm <= 0:
+    if not _validate_prices(p, a, slm):
         return None
 
     d       = direction.upper().strip()
@@ -111,8 +104,11 @@ def fixed_zone_sltp(
     tp2_pips:        float = 70.0,
     tp3_pips:        float = 100.0,
     pip_size:        float = 0.1,
-) -> FixedZonePlan | None:
-    """SL/TP fixed pip — fallback jika ATR tidak valid."""
+) -> SLTPlan | None:
+    """
+    SL/TP fixed pip — fallback jika ATR tidak valid.
+    Menggunakan SLTPlan yang sama dengan dynamic_atr_sltp.
+    """
     try:
         p, ez, slp, t1, t2, t3, ps = (
             float(price_now), float(entry_zone_pips), float(sl_pips),
@@ -121,9 +117,7 @@ def fixed_zone_sltp(
     except Exception:
         return None
 
-    if not all(math.isfinite(x) for x in [p, ez, slp, t1, t2, t3, ps]):
-        return None
-    if any(x <= 0 for x in [p, ez, slp, t1, t2, t3, ps]):
+    if not _validate_prices(p, ez, slp, t1, t2, t3, ps):
         return None
 
     d    = direction.upper().strip()
@@ -135,7 +129,7 @@ def fixed_zone_sltp(
         sl = entry_high - sl_v
         if not (entry_low < entry_high and sl < entry_low):
             return None
-        return FixedZonePlan(
+        return SLTPlan(
             entry_low=entry_low, entry_high=entry_high, sl=sl,
             tp1=entry_high + t1_v, tp2=entry_high + t2_v, tp3=entry_high + t3_v,
             method=f"FixedZone BUY | EZ={ez}p SL={slp}p",
@@ -145,7 +139,7 @@ def fixed_zone_sltp(
         sl = entry_low + sl_v
         if not (entry_low < entry_high and sl > entry_high):
             return None
-        return FixedZonePlan(
+        return SLTPlan(
             entry_low=entry_low, entry_high=entry_high, sl=sl,
             tp1=entry_low - t1_v, tp2=entry_low - t2_v, tp3=entry_low - t3_v,
             method=f"FixedZone SELL | EZ={ez}p SL={slp}p",

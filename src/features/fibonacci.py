@@ -1,12 +1,13 @@
-"""fibonacci.py — Kalkulasi level Fibonacci Retracement dan skor konfluensi."""
-from __future__ import annotations
+﻿"""fibonacci.py — Kalkulasi level Fibonacci Retracement dan skor konfluensi."""
 
 import pandas as pd
+
+from src.features.swing_utils import pivot_highs, pivot_lows
 
 
 FIB_LEVELS = [0.236, 0.382, 0.5, 0.618, 0.786]
 FIB_STRONG = {0.382, 0.5, 0.618}
-FIB_WEAK   = {0.236, 0.786}  # level terlalu lemah, tidak dihitung sebagai confluence
+FIB_WEAK   = {0.236, 0.786}   # level terlalu lemah, tidak dihitung sebagai confluence
 
 _FIB_LOOKBACK: dict[str, int] = {
     "M1":  300,
@@ -32,32 +33,71 @@ def last_swing(
     direction: str = "UP",
 ) -> tuple[float, float, str] | None:
     """
-    Cari swing yang relevan untuk arah sinyal.
-    BUY butuh swing UP (low sebelum high), SELL butuh swing DOWN (high sebelum low).
+    Cari swing TERBARU yang relevan untuk arah sinyal menggunakan pivot point detection.
+
+    BUY  butuh swing UP  (pivot low terbaru → pivot high terbaru setelahnya).
+    SELL butuh swing DOWN (pivot high terbaru → pivot low terbaru setelahnya).
+
+    Minimal ukuran swing = 2×ATR agar tidak terlalu kecil.
+
     Returns (swing_low, swing_high, direction) atau None.
     """
     if len(df) < lookback + 5:
         return None
 
-    w        = df.iloc[-lookback:].copy()
-    idx_hi   = w["high"].idxmax()
-    idx_lo   = w["low"].idxmin()
-    swing_lo = float(w.loc[idx_lo, "low"])
-    swing_hi = float(w.loc[idx_hi, "high"])
-    swing_dir = "UP" if idx_lo < idx_hi else "DOWN"
-
     direction = direction.upper()
-    if direction == "BUY"  and swing_dir != "UP":
-        return None
-    if direction == "SELL" and swing_dir != "DOWN":
-        return None
+    w = df.iloc[-lookback:].reset_index(drop=True)
 
-    atr_col = df["atr_14"].iloc[-2] if "atr_14" in df.columns else None
-    if atr_col is not None and pd.notna(atr_col) and float(atr_col) > 0:
-        if (swing_hi - swing_lo) < 2.0 * float(atr_col):
+    # Ambil ATR untuk filter swing minimum
+    atr_val = 0.0
+    if "atr_14" in df.columns:
+        v = df["atr_14"].iloc[-2]
+        if pd.notna(v) and float(v) > 0:
+            atr_val = float(v)
+
+    # Window pivot — lebih kecil untuk TF kecil agar lebih responsif
+    pivot_window = 3 if len(w) < 100 else 5
+
+    p_highs = pivot_highs(w, window=pivot_window)
+    p_lows  = pivot_lows(w,  window=pivot_window)
+
+    if not p_highs or not p_lows:
+        # Fallback: pakai high/low absolut dari lookback terbaru yang lebih kecil
+        w2 = df.iloc[-min(lookback, 50):].copy()
+        idx_hi = w2["high"].idxmax()
+        idx_lo = w2["low"].idxmin()
+        swing_lo  = float(w2.loc[idx_lo, "low"])
+        swing_hi  = float(w2.loc[idx_hi, "high"])
+        swing_dir = "UP" if idx_lo < idx_hi else "DOWN"
+        if direction == "BUY"  and swing_dir != "UP":   return None
+        if direction == "SELL" and swing_dir != "DOWN":  return None
+        if atr_val > 0 and (swing_hi - swing_lo) < 2.0 * atr_val:
             return None
+        return swing_lo, swing_hi, swing_dir
 
-    return swing_lo, swing_hi, swing_dir
+    if direction == "BUY":
+        # Swing UP: cari pivot low terbaru, lalu cari pivot high setelahnya
+        for lo_idx, lo_val in reversed(p_lows):
+            highs_after = [(hi_idx, hi_val) for hi_idx, hi_val in p_highs if hi_idx > lo_idx]
+            if not highs_after:
+                continue
+            hi_idx, hi_val = max(highs_after, key=lambda x: x[1])
+            if atr_val > 0 and (hi_val - lo_val) < 2.0 * atr_val:
+                continue
+            return lo_val, hi_val, "UP"
+
+    elif direction == "SELL":
+        # Swing DOWN: cari pivot high terbaru, lalu cari pivot low setelahnya
+        for hi_idx, hi_val in reversed(p_highs):
+            lows_after = [(lo_idx, lo_val) for lo_idx, lo_val in p_lows if lo_idx > hi_idx]
+            if not lows_after:
+                continue
+            lo_idx, lo_val = min(lows_after, key=lambda x: x[1])
+            if atr_val > 0 and (hi_val - lo_val) < 2.0 * atr_val:
+                continue
+            return lo_val, hi_val, "DOWN"
+
+    return None
 
 
 def fib_levels(swing_low: float, swing_high: float, direction: str) -> dict[str, float]:
@@ -83,7 +123,7 @@ def fib_levels(swing_low: float, swing_high: float, direction: str) -> dict[str,
     return levels
 
 
-def nearest_fib(price: float, levels: dict[str, float]) -> tuple[str, float] | None:
+def _nearest_fib(price: float, levels: dict[str, float]) -> tuple[str, float] | None:
     """Kembalikan nama dan harga level Fibonacci terdekat dengan price."""
     if not levels:
         return None
@@ -108,7 +148,6 @@ def fib_confluence_score(
     if atr <= 0:
         return 0, "FIB_SKIP"
 
-    # Pilih lookback
     if tf:
         lb = fib_lookback_for_tf(tf)
     elif lookback > 0:
@@ -124,7 +163,7 @@ def fib_confluence_score(
     if not levels:
         return 0, "FIB_NO_LEVEL"
 
-    near = nearest_fib(entry_price, levels)
+    near = _nearest_fib(entry_price, levels)
     if near is None:
         return 0, "FIB_NO_LEVEL"
 
@@ -135,7 +174,10 @@ def fib_confluence_score(
 
     try:
         lv_num = float(name.replace("fib_", ""))
-        # Level lemah (0.236, 0.786) tidak dihitung — terlalu sering false
+        # fib_0 / fib_1 = ujung swing — bukan zona retracement, tidak dihitung
+        if lv_num in {0.0, 1.0}:
+            return 0, f"FIB_ENDPOINT({name}={px:.2f})"
+        # Level lemah tidak dihitung — terlalu sering false signal
         if lv_num in FIB_WEAK:
             return 0, f"FIB_WEAK({name}={px:.2f})"
         if lv_num in FIB_STRONG:

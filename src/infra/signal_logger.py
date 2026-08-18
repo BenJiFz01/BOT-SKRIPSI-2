@@ -1,25 +1,18 @@
-"""signal_logger.py — Pencatatan histori sinyal ke CSV dan JSON."""
-from __future__ import annotations
+﻿"""signal_logger.py — Pencatatan histori sinyal ke CSV dan JSON."""
 
 import csv
 import json
 from dataclasses import asdict, dataclass
-from datetime import datetime, timezone, timedelta
+from datetime import datetime
 from pathlib import Path
 
 from src.models.signal import Signal
+from src.utils.time_utils import TZ_WIB, now_wib_str
 
 
 LOG_DIR   = Path("logs")
 CSV_PATH  = LOG_DIR / "signal_history.csv"
 JSON_PATH = LOG_DIR / "signal_history.json"
-
-_WIB = timezone(timedelta(hours=7))
-
-
-def _now_wib() -> str:
-    """Waktu sekarang dalam WIB (UTC+7), format ISO tanpa timezone suffix."""
-    return datetime.now(tz=_WIB).strftime("%Y-%m-%dT%H:%M:%S")
 
 CSV_FIELDS = [
     "signal_id", "timestamp", "symbol", "timeframe", "direction",
@@ -121,7 +114,7 @@ class SignalLogger:
 
     def log_signal(self, sig: Signal) -> str:
         """Catat sinyal baru ke CSV dan JSON. Return signal_id."""
-        now = _now_wib()
+        now = now_wib_str()
         sid = _make_signal_id(sig.symbol, sig.tf, now)
 
         is_setup = getattr(sig, "is_setup_plan", False)
@@ -198,7 +191,7 @@ class SignalLogger:
         rec = data[signal_id]
         rec["outcome"]       = outcome
         rec["outcome_price"] = price
-        rec["outcome_time"]  = _now_wib()
+        rec["outcome_time"]  = now_wib_str()
         rec["notes"]         = notes
         if duration_m > 0:
             rec["duration_minutes"] = duration_m
@@ -207,8 +200,8 @@ class SignalLogger:
                 ts = rec["timestamp"]
                 dt_sig = datetime.fromisoformat(ts)
                 if dt_sig.tzinfo is None:
-                    dt_sig = dt_sig.replace(tzinfo=_WIB)
-                dur = int((datetime.now(tz=_WIB) - dt_sig).total_seconds() / 60)
+                    dt_sig = dt_sig.replace(tzinfo=TZ_WIB)
+                dur = int((datetime.now(tz=TZ_WIB) - dt_sig).total_seconds() / 60)
                 rec["duration_minutes"] = dur
             except Exception:
                 pass
@@ -221,12 +214,8 @@ class SignalLogger:
     def get_all_records(self) -> list[dict]:
         return list(self._load().values())
 
-    def get_pending(self) -> list[dict]:
-        """Sinyal aktif PENDING untuk dimonitor tracker."""
-        return [r for r in self.get_all_records() if r.get("outcome") == "PENDING"]
-
     def get_trackable(self) -> list[dict]:
-        """Semua sinyal yang perlu dimonitor tracker: PENDING + SETUP (setup plan)."""
+        """Semua sinyal yang perlu dimonitor: PENDING (live) + SETUP (setup plan)."""
         return [r for r in self.get_all_records() if r.get("outcome") in ("PENDING", "SETUP")]
 
     def get_by_id(self, signal_id: str) -> dict | None:
@@ -242,9 +231,6 @@ class SignalLogger:
         by_dir: dict = {}
         by_mode: dict = {}
 
-        def bucket():
-            return {"total": 0, "win": 0, "loss": 0, "pending": 0}
-
         for rec in self.get_all_records():
             # Skip sinyal yang masih SETUP (belum ada outcome)
             if rec.get("outcome") == "SETUP":
@@ -258,7 +244,7 @@ class SignalLogger:
             dur     = int(rec.get("duration_minutes", 0) or 0)
 
             for bmap, key in [(by_tf, tf), (by_dir, direc), (by_mode, mode)]:
-                bmap.setdefault(key, bucket())
+                bmap.setdefault(key, {"total": 0, "win": 0, "loss": 0, "pending": 0})
                 bmap[key]["total"] += 1
 
             if outcome == "PENDING":
@@ -280,6 +266,62 @@ class SignalLogger:
 
         total_wins = sum(wins.values())
         decided    = total_wins + losses
+
+        # ── Component accuracy ─────────────────────────────────────────────────
+        # Hitung akurasi tiap komponen: berapa % sinyal WIN yang memakai komponen ini
+        component_accuracy: dict[str, dict] = {}
+
+        _component_fields = {
+            "EMA200":     "trigger_notes",
+            "EMA50":      "trigger_notes",
+            "RSI":        "trigger_notes",
+            "MACD":       "trigger_notes",
+            "PATTERN":    "pattern_names",
+            "DIVERGENCE": "divergence_detail",
+            "FIBONACCI":  "fib_detail",
+            "SNR":        "snr_detail",
+            "SND":        "snd_detail",
+        }
+        _comp_keywords = {
+            "EMA200":     "EMA200+",
+            "EMA50":      "EMA50+",
+            "RSI":        "RSI+",
+            "MACD":       "MACD+",
+            "PATTERN":    "",
+            "DIVERGENCE": "",
+            "FIBONACCI":  "",
+            "SNR":        "SNR_OK",
+            "SND":        "",
+        }
+
+        for rec in self.get_all_records():
+            if rec.get("outcome") in ("SETUP", "PENDING", "CANCELLED"):
+                continue
+            outcome = rec.get("outcome", "")
+            is_win  = outcome in ("WIN_TP1", "WIN_TP2", "WIN_TP3")
+            is_loss = outcome == "LOSS"
+            if not (is_win or is_loss):
+                continue
+
+            for comp, field in _component_fields.items():
+                field_val = str(rec.get(field, "") or "")
+                kw        = _comp_keywords[comp]
+                used      = (kw and kw in field_val) or (not kw and bool(field_val.strip()))
+                if not used:
+                    continue
+                if comp not in component_accuracy:
+                    component_accuracy[comp] = {"total": 0, "win": 0, "loss": 0, "accuracy": 0.0}
+                b = component_accuracy[comp]
+                b["total"] += 1
+                if is_win:
+                    b["win"] += 1
+                elif is_loss:
+                    b["loss"] += 1
+
+        for b in component_accuracy.values():
+            dec = b["win"] + b["loss"]
+            b["accuracy"] = round(b["win"] / dec * 100, 1) if dec > 0 else 0.0
+
         return {
             "total_signals":  decided + pending + cancelled,
             "pending":        pending,
@@ -296,4 +338,5 @@ class SignalLogger:
             "by_timeframe":   by_tf,
             "by_direction":   by_dir,
             "by_mode":        by_mode,
+            "component_accuracy": component_accuracy,
         }

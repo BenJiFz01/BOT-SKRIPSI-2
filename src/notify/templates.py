@@ -1,21 +1,8 @@
-"""templates.py — Format pesan sinyal untuk Telegram (HTML mode)."""
-from __future__ import annotations
+﻿"""templates.py — Format pesan sinyal untuk Telegram (HTML mode)."""
 
-from datetime import datetime, timezone, timedelta
 from src.models.signal import Signal
+from src.utils.time_utils import iso_to_wib_str
 
-
-_WIB = timezone(timedelta(hours=7))
-
-
-def _to_wib(iso_str: str) -> str:
-    try:
-        dt = datetime.fromisoformat(iso_str)
-        if dt.tzinfo is None:
-            dt = dt.replace(tzinfo=timezone.utc)
-        return dt.astimezone(_WIB).strftime("%Y-%m-%d %H:%M WIB")
-    except Exception:
-        return iso_str
 
 def format_signal(sig: Signal, signal_id: str = "") -> str:
     """Format sinyal / setup plan menjadi pesan HTML untuk Telegram."""
@@ -37,7 +24,7 @@ def format_signal(sig: Signal, signal_id: str = "") -> str:
     elif is_counter:
         emoji      = "\U0001f535" if sig.direction == "BUY" else "\U0001f7e0"
         mode_label = "COUNTER BUY" if sig.direction == "BUY" else "COUNTER SELL"
-        mode_note  = "\u26a0\ufe0f <i>Counter Trend {dash} melawan bias HTF. Risiko lebih tinggi.</i>"
+        mode_note  = f"\u26a0\ufe0f <i>Counter Trend {dash} melawan bias HTF. Risiko lebih tinggi.</i>"
     else:
         emoji      = "\U0001f7e2" if sig.direction == "BUY" else "\U0001f534"
         mode_label = sig.direction
@@ -74,7 +61,7 @@ def format_signal(sig: Signal, signal_id: str = "") -> str:
     # Susun pesan
     lines = [
         f"{emoji} <b>{mode_label}{trade_label} {dash} {sig.symbol}</b>",
-        f"TF: <b>{sig.tf}</b>  |  {_to_wib(sig.close_time)}",
+        f"TF: <b>{sig.tf}</b>  |  {iso_to_wib_str(sig.close_time)}",
     ]
     if signal_id:
         lines.append(f"ID: <code>{signal_id}</code>")
@@ -91,14 +78,17 @@ def format_signal(sig: Signal, signal_id: str = "") -> str:
         f"\U0001f4ca RR         : <code>{rr_str}</code>",
     ]
 
-    # Jika setup plan, tampilkan dasar penentuan zona entry secara eksplisit
+    # Jika setup plan, tampilkan dasar penentuan zona entry
+    # trigger_notes menyimpan format "SETUP_PLAN via ... | Fibonacci fib_X.XXX@..."
     if is_setup and sig.trigger_notes:
         tn = sig.trigger_notes
-        if "Fib=" in tn:
-            fib_part = tn.split("Fib=")[-1].strip()
+        if "Fibonacci" in tn:
+            # Ambil bagian setelah "Fibonacci" dari trigger_notes
+            fib_part = tn.split("Fibonacci")[-1].strip().split("|")[0].strip()
             lines.append(f"\U0001f4d0 Zona basis : <b>Fibonacci {fib_part}</b>")
-        else:
-            lines.append(f"\U0001f4d0 Zona basis : <i>EMA50 area</i>")
+        elif "EMA" in tn:
+            ema_part = tn.split("|")[-1].strip()
+            lines.append(f"\U0001f4d0 Zona basis : <i>{ema_part}</i>")
 
     lines += [
         "",

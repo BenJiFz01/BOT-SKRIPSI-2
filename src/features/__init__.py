@@ -1,1 +1,1 @@
-# src.features package
+"""features — Indikator teknikal, pattern, dan zona analisis."""

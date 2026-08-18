@@ -1,24 +1,9 @@
-"""zones_snr.py — Deteksi Support & Resistance berbasis swing point historis."""
-from __future__ import annotations
+﻿"""zones_snr.py — Deteksi Support & Resistance berbasis swing point historis."""
 
 import numpy as np
 import pandas as pd
 
-
-def swing_points(df: pd.DataFrame, left: int = 3, right: int = 3) -> tuple[list[float], list[float]]:
-    """Cari swing high dan swing low. Returns: (highs, lows)."""
-    highs: list[float] = []
-    lows:  list[float] = []
-    if len(df) < left + right + 5:
-        return highs, lows
-    h = df["high"].to_numpy(dtype=float)
-    l = df["low"].to_numpy(dtype=float)
-    for i in range(left, len(df) - right):
-        if all(h[i] > h[i-j] for j in range(1, left+1)) and all(h[i] > h[i+j] for j in range(1, right+1)):
-            highs.append(float(h[i]))
-        if all(l[i] < l[i-j] for j in range(1, left+1)) and all(l[i] < l[i+j] for j in range(1, right+1)):
-            lows.append(float(l[i]))
-    return highs, lows
+from src.features.swing_utils import swing_high_prices, swing_low_prices
 
 
 def cluster_levels(levels: list[float], tolerance: float) -> list[float]:
@@ -43,7 +28,7 @@ def nearest_level(price: float, levels: list[float]) -> float | None:
     return min(levels, key=lambda x: abs(x - price)) if levels else None
 
 
-def has_clear_road(
+def _has_clear_road(
     direction:    str,
     entry_price:  float,
     sl:           float,
@@ -75,19 +60,23 @@ def snr_confluence_score(
     atr:         float,
     sl:          float = 0.0,
     tp1_rr:      float = 1.5,
-    lookback:    int   = 200,
-    near_factor: float = 0.5,
+    lookback:    int   = 80,
+    near_factor: float = 0.8,
 ) -> tuple[int, str]:
     """
-    Skor konfluensi S/R (0-2).
-    +1 jika entry dekat S/R relevan, 0 jika clear road terhambat.
+    Skor konfluensi S/R (0-1).
+    Lookback 80 candle = relevan untuk scalping (bukan 2 hari ke belakang).
+    near_factor 0.8xATR = lebih sensitif mendeteksi S/R terdekat.
+    block_factor 0.7 = lebih ketat blokir resistance sebelum TP.
     """
     if atr <= 0:
         return 0, "SNR_SKIP"
 
     recent = df.iloc[-lookback:] if len(df) > lookback else df
-    highs, lows = swing_points(recent)
-    ctol = atr * 0.3
+    highs = swing_high_prices(recent)
+    lows  = swing_low_prices(recent)
+
+    ctol        = atr * 0.3
     resistances = cluster_levels(highs, ctol)
     supports    = cluster_levels(lows,  ctol)
     near_thr    = near_factor * atr
@@ -95,9 +84,13 @@ def snr_confluence_score(
 
     nr = nearest_level(entry_price, resistances)
     ns = nearest_level(entry_price, supports)
-    level_str = " ".join(filter(None, [f"S~{ns:.2f}" if ns else "", f"R~{nr:.2f}" if nr else ""]))
+    level_str = " ".join(filter(None, [
+        f"S~{ns:.2f}" if ns else "",
+        f"R~{nr:.2f}" if nr else "",
+    ]))
 
-    if sl > 0 and not has_clear_road(direction, entry_price, sl, tp1_rr, resistances, supports, atr):
+    # block_factor=0.7 lebih ketat — resistance dalam 70% jarak ke TP sudah dianggap blokir
+    if sl > 0 and not _has_clear_road(direction, entry_price, sl, tp1_rr, resistances, supports, atr, block_factor=0.7):
         return 0, f"SNR_BLOCKED({level_str})"
 
     score = 0

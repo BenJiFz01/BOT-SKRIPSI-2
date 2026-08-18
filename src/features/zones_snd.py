@@ -1,70 +1,67 @@
-"""zones_snd.py — Deteksi zona Supply & Demand berbasis base zone."""
-from __future__ import annotations
+﻿"""zones_snd.py — Deteksi zona Supply & Demand berbasis konsolidasi harga."""
 
 import pandas as pd
 
 
-_WINDOWS = [10, 15, 20, 30]
-_MAX_RANGE_BY_WINDOW = {10: 0.005, 15: 0.006, 20: 0.008, 30: 0.010}
-
-
 def detect_base_zone(
-    df:              pd.DataFrame,
-    window:          int   = 20,
-    max_range_ratio: float = 0.008,
+    df: pd.DataFrame,
+    window: int = 5,
+    max_range_ratio: float = 0.3,
 ) -> tuple[float, float] | None:
-    """Deteksi zona konsolidasi di window candle terakhir. Returns (zone_low, zone_high) atau None."""
-    if len(df) < window + 5:
+    """
+    Deteksi zona konsolidasi (base zone) dari N candle terakhir.
+    Returns (zone_low, zone_high) atau None jika tidak ada zona valid.
+    """
+    if len(df) < window + 2:
         return None
-    w   = df.iloc[-window:]
-    zh  = float(w["high"].max())
-    zl  = float(w["low"].min())
-    mid = (zh + zl) / 2.0
-    if mid <= 0 or (zh - zl) / mid > max_range_ratio:
+
+    recent = df.iloc[-(window + 2): -2]
+    highs  = recent["high"].astype(float)
+    lows   = recent["low"].astype(float)
+    atr    = df["atr_14"].iloc[-2] if "atr_14" in df.columns else None
+
+    zone_high = float(highs.max())
+    zone_low  = float(lows.min())
+    zone_range = zone_high - zone_low
+
+    if zone_range <= 0:
         return None
-    return zl, zh
+    if atr is not None and pd.notna(atr) and float(atr) > 0:
+        if zone_range > max_range_ratio * float(atr) * window:
+            return None
 
-
-def detect_base_zone_multi(df: pd.DataFrame) -> tuple[float, float] | None:
-    """Coba beberapa ukuran window, kembalikan zona pertama yang ditemukan."""
-    for w in _WINDOWS:
-        zone = detect_base_zone(df, window=w, max_range_ratio=_MAX_RANGE_BY_WINDOW[w])
-        if zone is not None:
-            return zone
-    return None
+    return zone_low, zone_high
 
 
 def snd_confluence_score(
-    direction:       str,
-    entry_price:     float,
-    df:              pd.DataFrame,
-    atr:             float,
-    window:          int   = 20,
-    max_range_ratio: float = 0.008,
-    near_factor:     float = 0.5,
-    use_multi:       bool  = True,
+    direction:   str,
+    entry_price: float,
+    df:          pd.DataFrame,
+    atr:         float,
+    near_factor: float = 1.0,
 ) -> tuple[int, str]:
     """
-    Skor konfluensi Supply & Demand zone (0, 1, atau 2).
-    +1 entry di dalam/dekat zona. +2 jika di sisi value (BUY=bawah mid, SELL=atas mid).
+    Skor konfluensi Supply & Demand (0 atau 1).
+    +1 jika entry berada dalam zona konsolidasi yang relevan.
+    Dicoba dari window kecil ke besar (3, 5, 7 candle).
     """
     if atr <= 0:
         return 0, "SND_SKIP"
 
-    zone = detect_base_zone_multi(df) if use_multi else detect_base_zone(df, window, max_range_ratio)
+    zone = None
+    for w in [3, 5, 7]:
+        zone = detect_base_zone(df, window=w)
+        if zone is not None:
+            break
+
     if zone is None:
         return 0, "SND_NO_ZONE"
 
-    zl, zh    = zone
-    tolerance = near_factor * atr
-    if not ((zl - tolerance) <= entry_price <= (zh + tolerance)):
-        return 0, f"SND_FAR({zl:.2f}-{zh:.2f})"
+    zone_low, zone_high = zone
+    zone_mid = (zone_low + zone_high) / 2
 
-    mid   = (zl + zh) / 2.0
-    score = 1
-    if (direction.upper() == "BUY" and entry_price <= mid) or \
-       (direction.upper() == "SELL" and entry_price >= mid):
-        score = 2
+    if abs(entry_price - zone_mid) <= near_factor * atr:
+        label = "SUPPLY" if direction.upper() == "SELL" else "DEMAND"
+        return 1, f"SND_{label}({zone_low:.2f}-{zone_high:.2f})"
 
-    label = "SND_DEMAND" if direction.upper() == "BUY" else "SND_SUPPLY"
-    return score, f"{label}({zl:.2f}-{zh:.2f})"
+    return 0, f"SND_FAR({zone_low:.2f}-{zone_high:.2f})"

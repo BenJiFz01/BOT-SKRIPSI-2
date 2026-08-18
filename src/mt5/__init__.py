@@ -1,1 +1,1 @@
-# src.mt5 package
+"""mt5 — Koneksi dan pengambilan data dari MetaTrader 5."""

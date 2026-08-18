@@ -1,1 +1,1 @@
-# src.infra package
+"""infra — Logging, scheduling, tracking, dan pelaporan."""

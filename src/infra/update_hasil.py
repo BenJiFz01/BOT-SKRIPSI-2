@@ -1,8 +1,7 @@
-"""update_hasil.py — CLI interaktif untuk update hasil sinyal (WIN/LOSS).
+﻿"""update_hasil.py — CLI interaktif untuk update hasil sinyal (WIN/LOSS).
 
 Jalankan: python -m src.infra.update_hasil
 """
-from __future__ import annotations
 
 import sys
 from pathlib import Path
@@ -41,13 +40,14 @@ def show_pending() -> None:
     print(f"  Total: {len(pending)} sinyal\n")
 
 
-def update(signal_id: str, outcome: str, price: float = 0.0, notes: str = "") -> None:
+def update(signal_id: str, outcome: str, price: float = 0.0, notes: str = "", duration_m: int = 0) -> None:
     outcome = outcome.upper().strip()
     if outcome not in VALID_OUTCOMES:
         print(f"\n  Outcome tidak valid. Pilihan: {', '.join(VALID_OUTCOMES)}\n")
         return
-    if _logger.update_outcome(signal_id, outcome, price=price, notes=notes):
-        print(f"\n  ✅ Updated: {signal_id} -> {outcome} @ {price}\n")
+    if _logger.update_outcome(signal_id, outcome, price=price, notes=notes, duration_m=duration_m):
+        dur_label = f" | durasi={duration_m} menit" if duration_m else ""
+        print(f"\n  ✅ Updated: {signal_id} -> {outcome} @ {price}{dur_label}\n")
     else:
         print(f"\n  ❌ Signal ID tidak ditemukan: {signal_id}\n")
         show_pending()
@@ -119,7 +119,7 @@ def show_stats() -> None:
 
 
 def show_tracker_status() -> None:
-    pending = _logger.get_pending()
+    pending = _logger.get_trackable()
     if not pending:
         print("\n  Tidak ada sinyal yang sedang dimonitor.\n")
         return
@@ -136,7 +136,7 @@ def show_tracker_status() -> None:
 
 def make_report() -> None:
     try:
-        from src.infra.laporan_excel import generate_report
+        from src.infra.report.generator import generate_report
         generate_report(_logger)
     except Exception as e:
         print(f"\n  Gagal membuat laporan: {e}\n")
@@ -169,11 +169,7 @@ def _cli() -> None:
             dur_s   = input("  Durasi menit (Enter=hitung otomatis): ").strip()
             dur_m   = int(dur_s) if dur_s.isdigit() else 0
             notes   = input("  Catatan (opsional): ").strip()
-            if _logger.update_outcome(sid, outcome, price=price, notes=notes, duration_m=dur_m):
-                print(f"\n  ✅ Updated: {sid} -> {outcome} @ {price}"
-                      f"{f' | durasi={dur_m} menit' if dur_m else ''}\n")
-            else:
-                print(f"\n  ❌ Signal ID tidak ditemukan: {sid}\n")
+            update(sid, outcome, price=price, notes=notes, duration_m=dur_m)
         elif choice == "3":
             sid = input("  Signal ID (Enter=pilih dari list): ").strip()
             if not sid:
