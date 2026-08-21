@@ -17,6 +17,7 @@ from src.infra.report.generator import generate_report
 from src.features.indicators import add_indicators
 from src.features.patterns import add_patterns
 from src.infra.logger import setup_logger
+from src.infra.reject_tracker import RejectTracker
 from src.infra.scheduler import CandleCloseWatcher
 from src.infra.signal_logger import SignalLogger
 from src.infra.signal_tracker import SignalTracker
@@ -73,34 +74,188 @@ def _extract_between(s: str, open_: str, close_: str) -> str:
         return ""
 
 
-def _explain_reject(raw: str) -> str:
+def _short_reject_with_df(raw: str, df=None) -> str:
     """
-    Terjemahkan reject reason terstruktur dari evaluator.py ke pesan manusia.
+    Seperti _short_reject tapi enriched dengan data dari DataFrame
+    untuk kasus EMA200 (tampilkan nilai close vs EMA200 aktual).
+    """
+    import re
+    import pandas as pd
 
-    Format input yang didukung (semuanya dari evaluator.py):
-      Gate 1: NOT_ENOUGH_BARS(N) | ATR_INVALID | ATR_TOO_LOW(val<min)
-              NEWS_SPIKE_SKIP | OUT_OF_SESSION(sess) | COOLDOWN(N/M)
-      Gate 2: BIAS_FAIL(detail) | BIAS_FAIL+CT_FAIL(detail)
-      Gate 3: TRIGGER_FAIL:dir=X:score=N/M:comp=[...]:cond=X
-              EMA200_WAJIB:dir=X:bias=X:comp=[...]:cond=X
-              RSI_EXTREME:RSI_OVERBOUGHT/OVERSOLD(val):dir=X:cond=X
-              CT_EMA200_FAIL:dir=X:comp=[...] | CT_NO_FIB(...) | CT_NO_DIV
-      Gate 4: SLTP_NONE
-      Gate 5: CONFLUENCE_FAIL:score=N/M:comp=[...]:cond=X
-              INTRADAY_NO_FIB:comp=[...]
-              RR_FAIL:rr=X/min=Y | CANDLE_CONFIRM_FAIL:dir=X
+    if not raw or raw in ("INIT", "OK"):
+        return raw
+    u = raw.upper()
 
+    if u.startswith("EMA200_WAJIB") or u.startswith("CT_EMA200_FAIL"):
+        dir_ = (re.search(r"dir=(\w+)", raw) or type('', (), {'group': lambda s, x: '?'})()).group(1)
+        prefix = "CT — EMA200" if u.startswith("CT") else "EMA200"
+        if df is not None and len(df) >= 2:
+            try:
+                last   = df.iloc[-2]
+                close  = float(last.get("close", 0))
+                ema200 = last.get("ema_200")
+                if ema200 is not None and not pd.isna(ema200):
+                    ema200 = float(ema200)
+                    side   = "di bawah" if close < ema200 else "di atas"
+                    return f"{prefix}: close={close:.1f} {side} EMA200={ema200:.1f} — {dir_} ditolak"
+            except Exception:
+                pass
+        comp = _fmt_comp(_extract_between(raw, "[", "]"))
+        return f"{prefix}: {dir_} ditolak  [{comp}]"
+
+    return _short_reject(raw)
+
+
+def _short_reject(raw: str) -> str:
+    """
+    Buat label reject satu baris dengan alasan teknikal jelas untuk terminal.
     Contoh output:
-      Gate 3 ✗ – Trigger skor 2/4
-        Komponen : EMA200✓ EMA50✗ Align✗ RSI✗(58) MACD✗ Candle✓
-        Arah coba: BUY | Pasar: sideways (threshold dinaikkan +1)
+      'EMA200: close=4356.9 di bawah EMA200=4372.8'
+      'Trigger 2/4: EMA200✓ EMA50✗ RSI✗(58) MACD✗'
+      'Confluence 0/2: no Fibonacci, no Pattern'
+      'Bias: D1→netral, tidak ada TF konfirmasi'
+      'RSI overbought RSI=74 — BUY ditolak'
+      'RR terlalu rendah: RR=1.1 (min 1.5)'
     """
+    import re
+
+    if not raw or raw in ("INIT", "OK"):
+        return raw
+    u = raw.upper()
+
+    # Gate 1 — kondisi pasar / data
+    if u.startswith("NOT_ENOUGH_BARS"):
+        val = _extract_between(raw, "(", ")")
+        return f"Data kurang: {val} bar"
+    if u.startswith("ATR_INVALID"):
+        return "ATR tidak valid — data flat"
+    if u.startswith("ATR_TOO_LOW"):
+        val = _extract_between(raw, "(", ")")
+        return f"ATR terlalu kecil: {val} — pasar flat"
+    if u.startswith("NEWS_SPIKE_SKIP"):
+        return "ATR spike ekstrem — skip (news?)"
+    if u.startswith("COOLDOWN"):
+        val = _extract_between(raw, "(", ")")
+        return f"Cooldown: {val}"
+    if u.startswith("OUT_OF_SESSION"):
+        val = _extract_between(raw, "(", ")")
+        return f"Luar sesi: {val}"
+
+    # Gate 2 — HTF bias
+    if u.startswith("BIAS_FAIL+CT"):
+        detail = _extract_between(raw, "(", ")")
+        return f"Bias+CT gagal: {detail[:60]}" if detail else "Bias+CT gagal"
+    if u.startswith("BIAS_FAIL"):
+        detail = _extract_between(raw, "(", ")")
+        if not detail:
+            return "Bias: tidak ada TF konfirmasi"
+        # Ubah format "H1:BULL D1:NEUTRAL" jadi lebih baca
+        parts = []
+        for item in detail.split():
+            if ":" in item:
+                tf_p, b = item.split(":", 1)
+                parts.append(f"{tf_p}→{b.lower()}")
+        return "Bias: " + ", ".join(parts) if parts else f"Bias: {detail[:60]}"
+
+    # Gate 3 — EMA200
+    if u.startswith("EMA200_WAJIB"):
+        # Ambil comp=[...] untuk tahu close vs EMA200
+        comp = _extract_between(raw, "[", "]")
+        dir_ = (re.search(r"dir=(\w+)", raw) or type('', (), {'group': lambda s, x: '?'})()).group(1)
+        # Cari token close dan ema200 dari comp jika ada
+        m_close = re.search(r"close[=:]([0-9.]+)", raw)
+        m_ema   = re.search(r"[Ee][Mm][Aa]200[=:]([0-9.]+)", raw)
+        if m_close and m_ema:
+            c, e = float(m_close.group(1)), float(m_ema.group(1))
+            side = "di bawah" if c < e else "di atas"
+            return f"EMA200: close={c:.1f} {side} EMA200={e:.1f} — {dir_} ditolak"
+        # Fallback: tampilkan komponen saja
+        comp_fmt = _fmt_comp(comp) if comp else ""
+        return f"EMA200: {dir_} tidak valid  [{comp_fmt}]" if comp_fmt else f"EMA200: {dir_} tidak valid"
+
+    if u.startswith("RSI_EXTREME"):
+        segs  = raw.split(":", 2)
+        inner = segs[1] if len(segs) > 1 else ""
+        val   = _extract_between(inner, "(", ")")
+        kind  = "overbought" if "OVERBOUGHT" in inner.upper() else "oversold"
+        dir_  = "?"
+        for seg in (segs[2:] if len(segs) > 2 else []):
+            m = re.search(r"dir=(\w+)", seg)
+            if m: dir_ = m.group(1)
+        return f"RSI {kind} RSI={val} — {dir_} ditolak"
+
+    if u.startswith("TRIGGER_FAIL"):
+        score = re.search(r"score=(\d+/\d+)", raw)
+        comp  = _fmt_comp(_extract_between(raw, "[", "]"))
+        sc    = score.group(1) if score else "?"
+        return f"Trigger {sc}: {comp}"
+
+    if u.startswith("CT_EMA200_FAIL"):
+        comp = _fmt_comp(_extract_between(raw, "[", "]"))
+        return f"CT — EMA200 tidak valid: {comp}"
+    if u.startswith("CT_NO_FIB"):
+        detail = _extract_between(raw, "(", ")")
+        return f"CT — Fibonacci tidak ada: {detail[:50]}" if detail else "CT — Fibonacci tidak ada"
+    if u.startswith("CT_NO_DIV"):
+        return "CT — Divergence RSI/MACD tidak ada"
+
+    # Gate 4
+    if u.startswith("SLTP_NONE"):
+        return "SL/TP tidak dapat dihitung"
+
+    # Gate 5 — confluence & RR
+    if u.startswith("CONFLUENCE_FAIL"):
+        score = re.search(r"score=(-?\d+/\d+)", raw)
+        comp  = _fmt_comp(_extract_between(raw, "[", "]"))
+        sc    = score.group(1) if score else "?"
+        return f"Confluence {sc}: {comp}"
+    if u.startswith("INTRADAY_NO_FIB"):
+        comp = _fmt_comp(_extract_between(raw, "[", "]"))
+        return f"Fibonacci wajib tidak ada: {comp}"
+    if u.startswith("RR_FAIL"):
+        rr_part = min_part = ""
+        for seg in raw.split(":"):
+            if seg.startswith("rr="):
+                val = seg[3:]
+                if "/" in val:
+                    rr_part, min_part = val.split("/", 1)
+                    if min_part.startswith("min="):
+                        min_part = min_part[4:]
+                else:
+                    rr_part = val
+        return f"RR terlalu rendah: RR={rr_part} (min {min_part})"
+    if u.startswith("CANDLE_CONFIRM_FAIL"):
+        m = re.search(r"dir=(\w+)", raw)
+        dir_ = m.group(1) if m else "?"
+        return f"Candle konfirmasi gagal — {dir_}"
+
+    return raw.split(":")[0]
+
+
+def _explain_reject(raw: str) -> str:
+    """Terjemahkan reject reason terstruktur dari evaluator.py ke pesan manusia."""
     if not raw or raw in ("INIT", "OK"):
         return raw
 
-    # ── Normalisasi: ubah format KEY(val) → KEY dengan extractor terpisah ────
-    # Beberapa reject reason dari Gate 1 menggunakan format KEY(val) bukan KEY:key=val
-    # Tangani sebelum token parser dijalankan
+    def _tokens(s: str) -> dict[str, str]:
+        result: dict[str, str] = {}
+        i = 0
+        parts = s.split(":")
+        while i < len(parts):
+            kv = parts[i]
+            if "=" not in kv:
+                result["_type"] = kv
+                i += 1
+                continue
+            k, v = kv.split("=", 1)
+            if v.startswith("[") and "]" not in v:
+                while i + 1 < len(parts) and "]" not in v:
+                    i += 1
+                    v += ":" + parts[i]
+            result[k] = v
+            i += 1
+        return result
+
     raw_upper = raw.upper()
 
     if raw_upper.startswith("NOT_ENOUGH_BARS"):
@@ -135,73 +290,42 @@ def _explain_reject(raw: str) -> str:
         detail = _extract_between(raw, "(", ")")
         return f"Gate 3 ✗ – Counter trend: tidak ada level Fibonacci valid ({detail})"
 
-    # BIAS_FAIL dan BIAS_FAIL+CT_FAIL menggunakan format KEY(detail)
     if raw_upper.startswith("BIAS_FAIL"):
         detail = _extract_between(raw, "(", ")")
         parts = []
         for item in detail.split():
             if ":" in item:
                 tf_part, b = item.split(":", 1)
-                b_label = {"BULL":"↑BULL","BEAR":"↓BEAR","NEUTRAL":"→netral","MISSING":"N/A"}.get(b.upper(), b)
+                b_label = {"BULL": "↑BULL", "BEAR": "↓BEAR", "NEUTRAL": "→netral", "MISSING": "N/A"}.get(b.upper(), b)
                 parts.append(f"{tf_part}:{b_label}")
             elif item:
-                # handle token [TF_FAIL:H1_diperlukan]
                 parts.append(item.replace("[", "").replace("]", ""))
         bias_str = " ".join(parts)
         if "CT_FAIL" in raw_upper:
             return f"Gate 2 ✗ – Bias netral & counter trend gagal\n        HTF  : {bias_str}"
         return f"Gate 2 ✗ – Bias HTF netral/tidak jelas\n        HTF  : {bias_str}"
 
-    # RSI_EXTREME: format RSI_EXTREME:RSI_OVERBOUGHT(val):dir=X:cond=X
     if raw_upper.startswith("RSI_EXTREME"):
-        segs = raw.split(":", 2)
+        segs  = raw.split(":", 2)
         inner = segs[1] if len(segs) > 1 else ""
         val   = _extract_between(inner, "(", ")")
-        kind  = "overbought (BUY terlalu berisiko)" if "OVERBOUGHT" in inner.upper() \
-                else "oversold (SELL terlalu berisiko)"
-        # parse dir dari sisa
-        dir_ = "?"
-        for seg in segs[2:] if len(segs) > 2 else []:
+        kind  = "overbought (BUY terlalu berisiko)" if "OVERBOUGHT" in inner.upper() else "oversold (SELL terlalu berisiko)"
+        dir_  = "?"
+        for seg in (segs[2:] if len(segs) > 2 else []):
             for part in seg.split(":"):
                 if part.startswith("dir="):
                     dir_ = part[4:]
         return f"Gate 3 ✗ – RSI {kind} (RSI={val}) → arah {dir_} ditolak"
-    def _tokens(s: str) -> dict[str, str]:
-        result: dict[str, str] = {}
-        i = 0
-        parts = s.split(":")
-        while i < len(parts):
-            kv = parts[i]
-            if "=" not in kv:
-                result["_type"] = kv
-                i += 1
-                continue
-            k, v = kv.split("=", 1)
-            # Jika value mulai dengan '[', gabungkan sampai ']'
-            if v.startswith("[") and "]" not in v:
-                while i + 1 < len(parts) and "]" not in v:
-                    i += 1
-                    v += ":" + parts[i]
-            result[k] = v
-            i += 1
-        return result
 
-    tok = _tokens(raw)
+    tok   = _tokens(raw)
     rtype = tok.get("_type", raw.split(":")[0])
 
-    # ── Gate 1 (format :key=val — sudah ditangani di atas via prefix) ──────────
-
-    # ── Gate 2 (sudah ditangani di atas via prefix) ───────────────────────────
-
-    # ── Gate 3 ────────────────────────────────────────────────────────────────
     if rtype == "TRIGGER_FAIL":
-        score  = tok.get("score", "?")
-        comp   = _fmt_comp(_extract_between(raw, "[", "]"))
-        dir_   = tok.get("dir", "?")
-        cond   = _MKT_LABEL.get(tok.get("cond", ""), "")
-        lines  = [f"Gate 3 ✗ – Trigger skor kurang ({score})"]
-        lines.append(f"        Arah     : {dir_}")
-        lines.append(f"        Komponen : {comp}")
+        score = tok.get("score", "?")
+        comp  = _fmt_comp(_extract_between(raw, "[", "]"))
+        dir_  = tok.get("dir", "?")
+        cond  = _MKT_LABEL.get(tok.get("cond", ""), "")
+        lines = [f"Gate 3 ✗ – Trigger skor kurang ({score})", f"        Arah     : {dir_}", f"        Komponen : {comp}"]
         if cond:
             lines.append(f"        Pasar    : {cond}")
         return "\n".join(lines)
@@ -211,51 +335,31 @@ def _explain_reject(raw: str) -> str:
         bias  = tok.get("bias", "?")
         comp  = _fmt_comp(_extract_between(raw, "[", "]"))
         cond  = _MKT_LABEL.get(tok.get("cond", ""), "")
-        lines = [f"Gate 3 ✗ – Harga di sisi salah EMA200 (wajib lulus)"]
-        lines.append(f"        Arah coba: {dir_} (bias HTF={bias})")
-        lines.append(f"        Komponen : {comp}")
+        lines = [f"Gate 3 ✗ – Harga di sisi salah EMA200 (wajib lulus)", f"        Arah coba: {dir_} (bias HTF={bias})", f"        Komponen : {comp}"]
         if cond:
             lines.append(f"        Pasar    : {cond}")
         return "\n".join(lines)
 
-    if rtype == "RSI_EXTREME":
-        # RSI_EXTREME:RSI_OVERBOUGHT(65):dir=BUY:cond=normal
-        inner = raw[len("RSI_EXTREME:"):].split(":")[0]
-        kind  = "overbought (BUY terlalu berisiko)" if "OVERBOUGHT" in inner else "oversold (SELL terlalu berisiko)"
-        val   = _extract_between(inner, "(", ")")
-        dir_  = tok.get("dir", "?")
-        return f"Gate 3 ✗ – RSI {kind} (RSI={val}) → arah {dir_} ditolak"
-
     if rtype == "CT_EMA200_FAIL":
-        dir_  = tok.get("dir", "?")
-        comp  = _fmt_comp(_extract_between(raw, "[", "]"))
-        return (
-            f"Gate 3 ✗ – Counter trend: harga di sisi salah EMA200\n"
-            f"        Arah coba: {dir_} | Komponen: {comp}"
-        )
+        dir_ = tok.get("dir", "?")
+        comp = _fmt_comp(_extract_between(raw, "[", "]"))
+        return f"Gate 3 ✗ – Counter trend: harga di sisi salah EMA200\n        Arah coba: {dir_} | Komponen: {comp}"
 
     if rtype == "CONFLUENCE_FAIL":
         score = tok.get("score", "?")
         comp  = _fmt_comp(_extract_between(raw, "[", "]"))
         cond  = _MKT_LABEL.get(tok.get("cond", ""), "")
-        lines = [f"Gate 5 ✗ – Confluence skor kurang ({score})"]
-        lines.append(f"        Komponen : {comp}")
+        lines = [f"Gate 5 ✗ – Confluence skor kurang ({score})", f"        Komponen : {comp}"]
         if cond:
             lines.append(f"        Pasar    : {cond}")
         return "\n".join(lines)
 
     if rtype == "INTRADAY_NO_FIB":
         comp = _fmt_comp(_extract_between(raw, "[", "]"))
-        return (
-            f"Gate 5 ✗ – Intraday wajib Fibonacci, tidak ditemukan\n"
-            f"        Komponen : {comp}"
-        )
+        return f"Gate 5 ✗ – Intraday wajib Fibonacci, tidak ditemukan\n        Komponen : {comp}"
 
     if rtype == "RR_FAIL":
-        # Format: RR_FAIL:rr=1.23/min=1.5
-        # Karena '/' di dalam value, parse manual
-        rr_part = ""
-        min_part = ""
+        rr_part = min_part = ""
         for seg in raw.split(":"):
             if seg.startswith("rr="):
                 val = seg[3:]
@@ -271,15 +375,7 @@ def _explain_reject(raw: str) -> str:
         dir_ = tok.get("dir", "?")
         return f"Gate 5 ✗ – Konfirmasi candle gagal (2 candle terakhir tidak mendukung arah {dir_})"
 
-    if rtype == "SLTP_NONE":
-        return "Gate 4 ✗ – SL/TP tidak dapat dihitung"
-
-    # ── Fallback — tampilkan apa adanya dengan formatting minimal ────────────
     return raw
-
-
-# ── Fungsi helper ─────────────────────────────────────────────────────────────
-
 def _fetch_prepare(symbol: str, tf: str, bars: int):
     df = fetch_ohlc(symbol, tf, bars).sort_values("time").reset_index(drop=True)
     df = add_indicators(df)
@@ -318,8 +414,10 @@ def main() -> None:
         f"session_filter={s.session_filter}"
     )
 
-    sig_logger = SignalLogger()
+    sig_logger     = SignalLogger()
+    reject_tracker = RejectTracker(interval_minutes=30)
     logger.info("SignalLogger aktif → logs/signal_history.csv")
+    logger.info("RejectTracker aktif → summary tiap 30 menit")
 
     def _notify(msg: str) -> None:
         try:
@@ -381,14 +479,11 @@ def main() -> None:
                     continue
 
                 _live_signals: set[tuple] = set()
-                # reject_by_gate: untuk ringkasan akhir per loop
-                # key = gate prefix (BIAS_FAIL, TRIGGER_FAIL, dst.)
-                # value = list TF yang kena gate itu
-                _reject_by_gate: dict[str, list[str]] = {}
                 signal_count = 0
 
                 tfs_closing = ", ".join(last_events.keys())
-                logger.info(f"┌─ {symbol} | Candle close: {tfs_closing}")
+                logger.info(f"{symbol} | Candle close: {tfs_closing}")
+                reject_tracker.record_candle()
 
                 for tf_u, event in last_events.items():
                     tf_u_norm = tf_u.upper()
@@ -439,34 +534,34 @@ def main() -> None:
                     )
 
                     if sig is None:
-                        raw   = data_norm.get(tf_u_norm, {}).attrs.get("reject_reason", "UNKNOWN")
-                        human = _explain_reject(raw)
-                        # Log detail per TF ke file (DEBUG) — tidak bising di terminal
-                        logger.debug(f"│  {tf_u_norm:<4} ✗  {human}")
-                        # Untuk ringkasan terminal: ambil gate prefix saja
-                        gate_key = raw.split(":")[0].split("(")[0]
-                        _reject_by_gate.setdefault(gate_key, []).append(tf_u_norm)
+                        raw      = data_norm.get(tf_u_norm, {}).attrs.get("reject_reason", "UNKNOWN")
+                        df_cur   = data_norm.get(tf_u_norm)
+                        logger.info(f"{symbol} {tf_u_norm:<3} ✗  {_short_reject_with_df(raw, df_cur)}")
+                        logger.debug(f"{tf_u_norm} detail: {_explain_reject(raw)}")
+                        reject_tracker.record_reject(
+                            symbol = symbol,
+                            tf     = tf_u_norm,
+                            raw    = raw,
+                            df     = df_cur,
+                        )
                     else:
                         signal_count += 1
                         signal_id = sig_logger.log_signal(sig)
-                        mode_str  = "COUNTER" if sig.signal_mode == "counter_trend" else sig.trade_mode.upper()
 
-                        # Log sinyal keluar di INFO (selalu muncul di terminal)
-                        logger.info(
-                            f"│  {tf_u_norm:<4} ✅ SINYAL {sig.direction} [{mode_str}]"
-                            f"  entry={sig.entry:.2f}  sl={sig.sl:.2f}  tp1={sig.tp:.2f}"
-                            f"  RR={sig.rr:.2f}  T={sig.trigger_score}/6  C={sig.confluence_score}/7"
-                        )
-                        # Detail teknikal satu baris di bawah (INFO juga)
-                        detail_parts = []
-                        if sig.trigger_notes:
-                            detail_parts.append(f"trigger=[{sig.trigger_notes[:50]}]")
-                        if sig.fib_detail:
-                            detail_parts.append(f"fib={sig.fib_detail}")
-                        if sig.snr_detail:
-                            detail_parts.append(f"snr={sig.snr_detail}")
-                        if detail_parts:
-                            logger.info(f"│       → {' | '.join(detail_parts)}")
+                        mode_str = "COUNTER" if sig.signal_mode == "counter_trend" else sig.trade_mode.upper()
+                        if sig.is_setup_plan:
+                            logger.info(
+                                f"{symbol} {tf_u_norm} SETUP {sig.direction} [{mode_str}]"
+                                f"  zona={sig.entry_low:.2f}-{sig.entry_high:.2f}"
+                                f"  sl={sig.sl:.2f}  RR={sig.rr:.2f}"
+                                f"  T={sig.trigger_score}/6  C={sig.confluence_score}/7"
+                            )
+                        else:
+                            logger.info(
+                                f"{symbol} {tf_u_norm} SINYAL {sig.direction} [{mode_str}]"
+                                f"  entry={sig.entry:.2f}  sl={sig.sl:.2f}  tp1={sig.tp:.2f}"
+                                f"  RR={sig.rr:.2f}  T={sig.trigger_score}/6  C={sig.confluence_score}/7"
+                            )
 
                         _live_signals.add((symbol, sig.tf, sig.direction))
                         rec = sig_logger.get_by_id(signal_id)
@@ -478,40 +573,8 @@ def main() -> None:
                             format_signal(sig, signal_id=signal_id),
                         )
 
-                # ── Ringkasan penutup per loop ────────────────────────────────
                 if signal_count > 0:
-                    logger.info(f"└─ {symbol} | ✅ {signal_count} sinyal berhasil dikirim")
-                elif _reject_by_gate:
-                    # Kelompokkan per gate — tampilkan satu baris ringkas di terminal
-                    # Detail sudah ada di file log (DEBUG)
-                    gate_parts = []
-                    for gate, tfs in _reject_by_gate.items():
-                        gate_label = {
-                            "NOT_ENOUGH_BARS":    "G1:data kurang",
-                            "ATR_INVALID":        "G1:ATR invalid",
-                            "ATR_TOO_LOW":        "G1:ATR flat",
-                            "NEWS_SPIKE_SKIP":    "G1:news spike",
-                            "COOLDOWN":           "G1:cooldown",
-                            "OUT_OF_SESSION":     "G1:luar sesi",
-                            "BIAS_FAIL":          "G2:bias netral",
-                            "BIAS_FAIL+CT_FAIL":  "G2:bias+CT gagal",
-                            "TRIGGER_FAIL":       "G3:trigger kurang",
-                            "EMA200_WAJIB":       "G3:EMA200 salah sisi",
-                            "RSI_EXTREME":        "G3:RSI ekstrem",
-                            "CT_EMA200_FAIL":     "G3:CT-EMA200 gagal",
-                            "CT_NO_FIB":          "G3:CT-Fib tidak ada",
-                            "CT_NO_DIV":          "G3:CT-divergence tidak ada",
-                            "SLTP_NONE":          "G4:SL/TP gagal",
-                            "CONFLUENCE_FAIL":    "G5:confluence kurang",
-                            "INTRADAY_NO_FIB":    "G5:intraday-Fib tidak ada",
-                            "RR_FAIL":            "G5:RR terlalu rendah",
-                            "CANDLE_CONFIRM_FAIL":"G5:candle confirm gagal",
-                        }.get(gate, gate)
-                        gate_parts.append(f"{gate_label}({','.join(tfs)})")
-                    logger.info(f"└─ {symbol} | ✗ Tidak ada sinyal → " + "  ".join(gate_parts))
-                    logger.info(f"   (detail lengkap di logs/app.log)")
-                else:
-                    logger.info(f"└─ {symbol} | Menunggu candle close berikutnya")
+                    reject_tracker.record_signal()
 
                 # ── Setup plan scan ───────────────────────────────────────────
                 if data_by_tf:
@@ -576,6 +639,7 @@ def main() -> None:
                     except Exception as e:
                         logger.debug(f"Setup plan scan error: {e}")
 
+            reject_tracker.maybe_print_summary(symbol=s.symbols[0] if s.symbols else "XAUUSD")
             time.sleep(s.poll_seconds)
 
     except KeyboardInterrupt:

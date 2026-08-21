@@ -1,10 +1,44 @@
 ﻿"""helpers.py — Fungsi utilitas internal engine (tidak diimpor dari luar)."""
 
+import json
+from datetime import datetime
+from pathlib import Path
+
 import pandas as pd
 
-
-# Cooldown state per (symbol, tf)
+# ── Cooldown state per (symbol, tf) — persisted ke file ────────────────────
+_COOLDOWN_PATH = Path("logs/cooldown_state.json")
 _LAST_SIGNAL_TIME: dict[tuple[str, str], pd.Timestamp] = {}
+
+
+def _load_cooldown() -> None:
+    """Muat state cooldown dari file saat startup."""
+    global _LAST_SIGNAL_TIME
+    if not _COOLDOWN_PATH.exists():
+        return
+    try:
+        raw = json.loads(_COOLDOWN_PATH.read_text(encoding="utf-8"))
+        for k, v in raw.items():
+            sym, tf = k.split("|", 1)
+            _LAST_SIGNAL_TIME[(sym, tf)] = pd.Timestamp(v, tz="UTC")
+    except Exception:
+        pass  # file corrupt → mulai fresh, tidak fatal
+
+
+def _save_cooldown() -> None:
+    """Simpan state cooldown ke file setelah sinyal baru."""
+    try:
+        _COOLDOWN_PATH.parent.mkdir(parents=True, exist_ok=True)
+        raw = {
+            f"{sym}|{tf}": ts.isoformat()
+            for (sym, tf), ts in _LAST_SIGNAL_TIME.items()
+        }
+        _COOLDOWN_PATH.write_text(json.dumps(raw, indent=2), encoding="utf-8")
+    except Exception:
+        pass  # gagal save tidak harus crash bot
+
+
+_load_cooldown()
 
 
 def atr_proxy(df: pd.DataFrame, n: int = 14) -> float:

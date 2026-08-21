@@ -66,13 +66,12 @@ def session_name(dt: datetime | None = None) -> str:
     if dt is None:
         dt = datetime.now(_TZ_UTC)
 
-    t     = to_wib(dt).time()
-    in_a  = _in_asian(t)
-    in_l  = _in_london(t)
-    in_n  = _in_ny(t)
-    in_ov = time(19, 0) <= t <= time(22, 0)
+    t    = to_wib(dt).time()
+    in_a = _in_asian(t)
+    in_l = _in_london(t)
+    in_n = _in_ny(t)
 
-    if in_ov:
+    if time(19, 0) <= t <= time(22, 0):
         return "Overlap L+NY"
     if in_l:
         return "London"

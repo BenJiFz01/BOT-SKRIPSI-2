@@ -9,10 +9,14 @@ def bias_from_tf(df: pd.DataFrame) -> str | None:
     """
     Baca bias BULL/BEAR dari satu TF berdasarkan EMA50/200.
 
-    Tiga jalur deteksi (urutan prioritas):
-      1. EMA200 Breakout Momentum — body candle >= 0.8×ATR, 2 candle konfirmasi.
-      2. Normal bias — posisi EMA50/200 + slope >= 40% + gap minimum.
-      3. Fallback ATR — harga jauh (>1×ATR) dari EMA200.
+    Empat jalur deteksi (urutan prioritas):
+      1. EMA200 Breakout Momentum — body >= 0.8×ATR + 2 candle konfirmasi
+      2. Price Action Priority — close > EMA50 > EMA200 (atau break +0.5×ATR)
+                                  tangkap early reversal/bounce tanpa tunggu slope
+      3. Normal Bias + Slope — posisi EMA + slope 30% + gap >= 0.05%
+      4. Fallback ATR — harga > EMA200 + 1×ATR (konfirmasi strong trend)
+
+    Returns: 'BULL', 'BEAR', atau None.
     """
     if len(df) < 220:
         return None
@@ -41,7 +45,25 @@ def bias_from_tf(df: pd.DataFrame) -> str | None:
             if float(cp3) > float(ep3) and float(cp) > float(ep) and float(close) < float(ema200) and momentum:  # type: ignore[arg-type]
                 return "BEAR"
 
-    # Jalur 2: Normal Bias (posisi + slope + gap)
+    # Jalur 2: Price Action Priority — early reversal detection
+    # Jika harga sudah clear break EMA200 dengan momentum, langsung confirm
+    # tanpa tunggu EMA50 slope recover penuh (untuk tangkap bounce/reversal awal)
+    if atr > 0:
+        # BULL: close > EMA50 > EMA200, atau close jauh di atas EMA200
+        if float(close) > float(ema50) > float(ema200):  # type: ignore[operator]
+            # Clear bullish structure — prioritaskan ini
+            return "BULL"
+        elif float(close) > float(ema200) + 0.5 * atr and float(close) > float(ema50):  # type: ignore[operator]
+            # Early bull momentum — harga break EMA200 dengan jarak cukup
+            return "BULL"
+        
+        # BEAR: close < EMA50 < EMA200, atau close jauh di bawah EMA200
+        if float(close) < float(ema50) < float(ema200):  # type: ignore[operator]
+            return "BEAR"
+        elif float(close) < float(ema200) - 0.5 * atr and float(close) < float(ema50):  # type: ignore[operator]
+            return "BEAR"
+
+    # Jalur 3: Normal Bias dengan slope check (lebih permisif: 30% threshold)
     is_bull = close > ema200 and ema50 > ema200  # type: ignore[operator]
     is_bear = close < ema200 and ema50 < ema200  # type: ignore[operator]
     if not (is_bull or is_bear):
@@ -58,15 +80,16 @@ def bias_from_tf(df: pd.DataFrame) -> str | None:
     if len(ema50_recent) >= 3:
         diffs   = ema50_recent.diff().dropna()
         n_total = len(diffs)
+        # Turunkan threshold dari 40% → 30% untuk lebih cepat detect reversal
         slope_ok = (
-            (is_bull and (diffs > 0).sum() / n_total >= 0.4)
-            or (is_bear and (diffs < 0).sum() / n_total >= 0.4)
+            (is_bull and (diffs > 0).sum() / n_total >= 0.3)
+            or (is_bear and (diffs < 0).sum() / n_total >= 0.3)
         )
 
     if gap_pct >= 0.0005 and slope_ok:
         return "BULL" if is_bull else "BEAR"
 
-    # Jalur 3: Fallback ATR
+    # Jalur 4: Fallback ATR — harga jauh dari EMA200
     if atr > 0:
         if is_bull and close > ema200 + atr:  # type: ignore[operator]
             return "BULL"

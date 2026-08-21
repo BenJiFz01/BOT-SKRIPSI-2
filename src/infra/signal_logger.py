@@ -27,6 +27,30 @@ CSV_FIELDS = [
     "duration_minutes", "notes",
 ]
 
+# Field & keyword untuk component accuracy di get_stats()
+_COMPONENT_FIELDS: dict[str, str] = {
+    "EMA200":     "trigger_notes",
+    "EMA50":      "trigger_notes",
+    "RSI":        "trigger_notes",
+    "MACD":       "trigger_notes",
+    "PATTERN":    "pattern_names",
+    "DIVERGENCE": "divergence_detail",
+    "FIBONACCI":  "fib_detail",
+    "SNR":        "snr_detail",
+    "SND":        "snd_detail",
+}
+_COMP_KEYWORDS: dict[str, str] = {
+    "EMA200":     "EMA200+",
+    "EMA50":      "EMA50+",
+    "RSI":        "RSI+",
+    "MACD":       "MACD+",
+    "PATTERN":    "",
+    "DIVERGENCE": "",
+    "FIBONACCI":  "",
+    "SNR":        "SNR_OK",
+    "SND":        "",
+}
+
 
 @dataclass
 class SignalRecord:
@@ -148,7 +172,6 @@ class SignalLogger:
             session_name      = sig.session_name,
             sl_method         = sig.sl_method,
             atr_value         = round(sig.atr_value, 4),
-            # Setup plan pakai outcome "SETUP" agar tidak masuk tracker
             outcome           = "SETUP" if is_setup else "PENDING",
         )
 
@@ -267,32 +290,7 @@ class SignalLogger:
         total_wins = sum(wins.values())
         decided    = total_wins + losses
 
-        # ── Component accuracy ─────────────────────────────────────────────────
-        # Hitung akurasi tiap komponen: berapa % sinyal WIN yang memakai komponen ini
         component_accuracy: dict[str, dict] = {}
-
-        _component_fields = {
-            "EMA200":     "trigger_notes",
-            "EMA50":      "trigger_notes",
-            "RSI":        "trigger_notes",
-            "MACD":       "trigger_notes",
-            "PATTERN":    "pattern_names",
-            "DIVERGENCE": "divergence_detail",
-            "FIBONACCI":  "fib_detail",
-            "SNR":        "snr_detail",
-            "SND":        "snd_detail",
-        }
-        _comp_keywords = {
-            "EMA200":     "EMA200+",
-            "EMA50":      "EMA50+",
-            "RSI":        "RSI+",
-            "MACD":       "MACD+",
-            "PATTERN":    "",
-            "DIVERGENCE": "",
-            "FIBONACCI":  "",
-            "SNR":        "SNR_OK",
-            "SND":        "",
-        }
 
         for rec in self.get_all_records():
             if rec.get("outcome") in ("SETUP", "PENDING", "CANCELLED"):
@@ -303,9 +301,9 @@ class SignalLogger:
             if not (is_win or is_loss):
                 continue
 
-            for comp, field in _component_fields.items():
+            for comp, field in _COMPONENT_FIELDS.items():
                 field_val = str(rec.get(field, "") or "")
-                kw        = _comp_keywords[comp]
+                kw        = _COMP_KEYWORDS[comp]
                 used      = (kw and kw in field_val) or (not kw and bool(field_val.strip()))
                 if not used:
                     continue

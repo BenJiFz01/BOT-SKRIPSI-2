@@ -1,15 +1,6 @@
-﻿"""scheduler.py — Deteksi candle close per symbol per timeframe."""
-
-from dataclasses import dataclass
+"""scheduler.py — Deteksi candle close per symbol per timeframe."""
 
 import pandas as pd
-
-
-@dataclass
-class CandleCloseEvent:
-    symbol:      str
-    tf:          str
-    closed_time: pd.Timestamp
 
 
 class CandleCloseWatcher:
@@ -18,10 +9,10 @@ class CandleCloseWatcher:
     def __init__(self) -> None:
         self._last: dict[tuple[str, str], pd.Timestamp] = {}
 
-    def check(self, symbol: str, tf: str, df: pd.DataFrame) -> CandleCloseEvent | None:
+    def check(self, symbol: str, tf: str, df: pd.DataFrame) -> pd.Timestamp | None:
         """
-        Kembalikan CandleCloseEvent jika ada candle baru sejak pengecekan terakhir,
-        None jika belum ada perubahan.
+        Kembalikan timestamp candle yang baru close jika ada perubahan,
+        None jika belum ada candle baru sejak pengecekan terakhir.
         """
         if len(df) < 2:
             return None
@@ -29,5 +20,5 @@ class CandleCloseWatcher:
         last_bar = pd.to_datetime(df.iloc[-2]["time"])
         if self._last.get(key) != last_bar:
             self._last[key] = last_bar
-            return CandleCloseEvent(symbol=symbol, tf=tf, closed_time=last_bar)
+            return last_bar
         return None

@@ -1,0 +1,405 @@
+"""reject_tracker.py — Tracking dan summary rejection sinyal untuk monitoring & tuning.
+
+Cara pakai:
+    tracker = RejectTracker()
+    tracker.record(symbol, tf, raw_reason, df)   # setiap kali sinyal reject
+    tracker.maybe_print_summary()                # panggil tiap loop — auto print tiap 30 menit
+
+Output terminal tiap 30 menit:
+    ══════════════════════════════════════════════════════
+     REJECT SUMMARY  XAUUSD  |  30 menit terakhir
+    ══════════════════════════════════════════════════════
+     Candle close : 42    Signal : 0    Reject : 42
+    ──────────────────────────────────────────────────────
+     #1  EMA200_WAJIB       18x (43%)  M5=12 M15=6
+     #2  CONFLUENCE_FAIL     8x (19%)  H1=5 H4=3
+     #3  BIAS_FAIL           7x (17%)  H4=4 D1=3
+     #4  TRIGGER_FAIL        5x (12%)  M15=3 H1=2
+     #5  ATR_TOO_LOW         3x  (7%)  M5=3
+         COOLDOWN            1x  (2%)  M5=1
+    ──────────────────────────────────────────────────────
+     Tuning hint : EMA200_WAJIB dominan → harga sedang koreksi,
+                   normal — tunggu harga kembali di atas EMA200
+    ══════════════════════════════════════════════════════
+"""
+
+import re
+from collections import defaultdict
+from datetime import datetime, timedelta
+
+import pandas as pd
+from loguru import logger
+
+from src.engine.helpers import atr_proxy, safe
+
+_SUMMARY_INTERVAL_MIN = 30
+
+# Kategori reject untuk grouping (raw reason prefix → nama pendek)
+_CATEGORY: dict[str, str] = {
+    "EMA200_WAJIB":       "EMA200_WAJIB",
+    "TRIGGER_FAIL":       "TRIGGER_FAIL",
+    "RSI_EXTREME":        "RSI_EXTREME",
+    "CT_EMA200_FAIL":     "CT_GAGAL",
+    "CT_NO_CHOCH":        "CT_GAGAL",
+    "CT_NO_DIV":          "CT_GAGAL",
+    "CT_NO_FIB":          "CT_GAGAL",
+    "BIAS_FAIL":          "BIAS_FAIL",
+    "BRIDGE_FAIL":        "BIAS_FAIL",
+    "CONFLUENCE_FAIL":    "CONFLUENCE_FAIL",
+    "INTRADAY_NO_ANCHOR": "CONFLUENCE_FAIL",
+    "PULLBACK_NO_FIB":    "CONFLUENCE_FAIL",
+    "REVERSAL_NO_ZONE":   "CONFLUENCE_FAIL",
+    "CANDLE_CONFIRM_FAIL":"CANDLE_FAIL",
+    "RR_FAIL":            "RR_FAIL",
+    "SL_TOO_WIDE":        "RR_FAIL",
+    "ATR_TOO_LOW":        "ATR_RENDAH",
+    "ATR_INVALID":        "ATR_RENDAH",
+    "NEWS_SPIKE_SKIP":    "NEWS_SPIKE",
+    "NOT_ENOUGH_BARS":    "DATA_KURANG",
+    "COOLDOWN":           "COOLDOWN",
+    "SLTP_NONE":          "SLTP_ERROR",
+}
+
+# Hint tuning per kategori dominan
+_HINT: dict[str, str] = {
+    "EMA200_WAJIB": (
+        "Harga sedang di sisi salah EMA200 LTF — kemungkinan koreksi dalam trend HTF. "
+        "Ini normal. Tunggu harga kembali di atas/bawah EMA200, atau cek apakah HTF bias masih valid."
+    ),
+    "BIAS_FAIL": (
+        "HTF belum punya bias jelas atau TF konfirmasi tidak selaras. "
+        "Pasar mungkin sedang transisi/konsolidasi. "
+        "Tuning: kurangi MIN_CONFIRM_VOTES=1, atau cek apakah TF range sudah cukup panjang."
+    ),
+    "CONFLUENCE_FAIL": (
+        "Zona entry tidak cukup terkonfirmasi (Fibonacci, S/R, Pattern, Divergence). "
+        "Tuning: kurangi MIN_CONFLUENCE_SCORE — tapi pastikan Fib masih ada untuk intraday. "
+        "Atau cek apakah harga sedang jauh dari level kunci."
+    ),
+    "TRIGGER_FAIL": (
+        "Momentum entry belum cukup kuat (EMA, RSI, MACD, Candle). "
+        "Tuning: kurangi MIN_TRIGGER_SCORE=3 untuk intraday atau SCALPING_MIN_TRIGGER_SCORE=2. "
+        "Tapi pastikan EMA200 dan RSI masih masuk akal."
+    ),
+    "RSI_EXTREME": (
+        "RSI overbought/oversold saat entry — harga sudah terlalu jauh bergerak. "
+        "Ini filter yang benar. Tunggu RSI kembali ke area normal sebelum entry."
+    ),
+    "CT_GAGAL": (
+        "Counter trend tidak memenuhi syarat (CHoCH/Divergence/Fibonacci). "
+        "Counter trend memang jarang valid — ini expected."
+    ),
+    "RR_FAIL": (
+        "Risk/Reward terlalu kecil atau SL terlalu lebar. "
+        "Cek apakah swing point yang dipakai sebagai SL terlalu jauh. "
+        "Atau turunkan TP RR minimum di .env."
+    ),
+    "ATR_RENDAH": (
+        "Volatilitas pasar terlalu rendah untuk entry. "
+        "Normal di sesi sepi (Asia malam). Tidak perlu tuning — tunggu pasar aktif."
+    ),
+    "CANDLE_FAIL": (
+        "Candle konfirmasi tidak mendukung arah sinyal. "
+        "Tuning: ini biasanya false negative kecil — bisa turunkan min_body dari 0.3x ke 0.2x ATR di evaluator.py."
+    ),
+    "COOLDOWN":    "Cooldown normal antar sinyal. Tidak perlu tuning.",
+    "NEWS_SPIKE":  "Spike news — sistem sengaja skip. Benar.",
+    "DATA_KURANG": "Data bar belum cukup — tunggu lebih banyak candle terkumpul.",
+    "SLTP_ERROR":  "SL/TP gagal dihitung — kemungkinan data price bermasalah. Cek koneksi MT5.",
+}
+
+
+def _categorize(raw: str) -> str:
+    """Petakan raw reject reason ke kategori pendek."""
+    raw_up = raw.upper().split(":")[0].split("(")[0].strip()
+    for prefix, cat in _CATEGORY.items():
+        if raw_up.startswith(prefix.upper()):
+            return cat
+    return raw_up[:20]  # fallback: 20 karakter pertama
+
+
+def _extract_context(raw: str, df: pd.DataFrame | None) -> str:
+    """
+    Ekstrak info konteks spesifik dari raw reason + DataFrame
+    untuk ditampilkan di baris log per-TF.
+
+    Contoh output:
+      EMA200_WAJIB  → "close=4395.2 EMA200=4412.8 gap=17.6pts (1.1×ATR)"
+      CONFLUENCE    → "skor=1/2"
+      TRIGGER_FAIL  → "skor=2/4"
+      RR_FAIL       → "RR=1.1 min=1.5"
+    """
+    raw_up = raw.upper()
+
+    # EMA200_WAJIB: tampilkan close vs EMA200 dan gap dalam ATR (dari df)
+    if raw_up.startswith("EMA200_WAJIB") or raw_up.startswith("CT_EMA200"):
+        # Coba ambil dari df dulu
+        if df is not None:
+            try:
+                last   = df.iloc[-2]
+                close  = float(last.get("close", 0))
+                ema200 = safe(last, "ema_200")
+                atr    = atr_proxy(df)
+                if ema200 and atr > 0:
+                    gap      = abs(close - ema200)
+                    atr_mul  = gap / atr
+                    side     = "bawah" if close < ema200 else "atas"
+                    return (
+                        f"close={close:.1f}  EMA200={ema200:.1f}  "
+                        f"gap={gap:.1f}pts ({atr_mul:.1f}x ATR)  [{side} EMA200]"
+                    )
+            except Exception:
+                pass
+        # Fallback: ambil dari raw string
+        dir_ = re.search(r"dir=(\w+)", raw)
+        bias = re.search(r"bias=(\w+)", raw)
+        parts = []
+        if dir_:  parts.append(f"arah={dir_.group(1)}")
+        if bias:  parts.append(f"HTF={bias.group(1)}")
+        return "  ".join(parts) if parts else ""
+
+    # CONFLUENCE_FAIL: tampilkan skor dan komponen
+    if raw_up.startswith("CONFLUENCE_FAIL") or raw_up.startswith("INTRADAY_NO") or \
+       raw_up.startswith("PULLBACK_NO") or raw_up.startswith("REVERSAL_NO"):
+        parts = []
+        m_sc = re.search(r"score=(\d+/\d+)", raw)
+        if m_sc:
+            parts.append(f"skor={m_sc.group(1)}")
+        # Ambil komponen dari dalam [...] — strip semua kurung dan isinya agar ringkas
+        m_comp = re.search(r"\[([^\]]+)\]", raw)
+        if m_comp:
+            tokens = []
+            for t in m_comp.group(1).split():
+                # Ambil bagian sebelum '(' pertama — buang semua kurung nested
+                clean = re.sub(r'\([^)]*\)', '', t)  # strip (...)
+                clean = clean.rstrip("()")            # bersihkan sisa
+                if clean:
+                    tokens.append(clean)
+            parts.append(" ".join(tokens))
+        if not parts:
+            parts.append(raw[raw.find(":")+1:][:60] if ":" in raw else raw[:60])
+        return "  ".join(parts)
+
+    # TRIGGER_FAIL: tampilkan skor
+    if raw_up.startswith("TRIGGER_FAIL"):
+        m = re.search(r"score=(\d+/\d+)", raw)
+        dir_ = re.search(r"dir=(\w+)", raw)
+        parts = []
+        if dir_:  parts.append(f"arah={dir_.group(1)}")
+        if m:     parts.append(f"skor={m.group(1)}")
+        return "  ".join(parts)
+
+    # RSI_EXTREME: tampilkan nilai RSI
+    if raw_up.startswith("RSI_EXTREME"):
+        m = re.search(r"\((\d+\.?\d*)\)", raw)
+        if m:
+            val = m.group(1)
+            kind = "OB" if "OVERBOUGHT" in raw_up else "OS"
+            return f"RSI={val} ({kind})"
+
+    # BIAS_FAIL / BRIDGE_FAIL: ambil semua konten dalam kurung pertama (nested-safe)
+    if raw_up.startswith("BIAS_FAIL") or raw_up.startswith("BRIDGE_FAIL"):
+        idx = raw.find("(")
+        if idx != -1:
+            # Cari posisi ')' terakhir yang menutup kurung pembuka pertama (handle nested)
+            depth = 0
+            end_idx = -1
+            for i in range(idx, len(raw)):
+                if raw[i] == "(":   depth += 1
+                elif raw[i] == ")": depth -= 1
+                if depth == 0:
+                    end_idx = i
+                    break
+            if end_idx == -1:  # Tidak ketemu tutup kurung? ambil sampai akhir
+                detail = raw[idx + 1:]
+            else:
+                detail = raw[idx + 1 : end_idx]
+            
+            if not detail.strip():
+                return "tidak ada TF konfirmasi — TF ini adalah yang tertinggi (self-confirm)"
+            # Potong rapi di 90 karakter tanpa memotong di tengah kata
+            if len(detail) > 90:
+                detail = detail[:90].rsplit(" ", 1)[0] + "…"
+            return detail
+        return ""
+
+    # RR_FAIL: tampilkan RR aktual vs minimum
+    if raw_up.startswith("RR_FAIL"):
+        m_rr  = re.search(r"rr=([0-9.]+)", raw)
+        m_min = re.search(r"min=([0-9.]+)", raw)
+        parts = []
+        if m_rr:  parts.append(f"RR={m_rr.group(1)}")
+        if m_min: parts.append(f"min={m_min.group(1)}")
+        return "  ".join(parts)
+
+    # ATR_TOO_LOW: tampilkan ATR aktual vs minimum
+    if raw_up.startswith("ATR_TOO_LOW"):
+        m = re.search(r"\(([^)]+)\)", raw)
+        if m:
+            return m.group(1)
+
+    # CT_NO_CHOCH: tampilkan detail gap
+    if raw_up.startswith("CT_NO_CHOCH"):
+        m = re.search(r"\(([^)]+)\)", raw)
+        if m:
+            return m.group(1)[:60]
+
+    # COOLDOWN: tampilkan sisa bar
+    if raw_up.startswith("COOLDOWN"):
+        m = re.search(r"\(([^)]+)\)", raw)
+        if m:
+            return f"tunggu {m.group(1)}"
+
+    return ""
+
+
+class RejectTracker:
+    """
+    Melacak semua rejection sinyal dan mencetak summary periodik.
+
+    Menyimpan:
+      - Jumlah total candle close & signal per sesi
+      - Breakdown reject per kategori + per TF
+      - Timestamp window untuk summary 30 menit
+    """
+
+    def __init__(self, interval_minutes: int = _SUMMARY_INTERVAL_MIN) -> None:
+        self._interval    = timedelta(minutes=interval_minutes)
+        self._window_start = datetime.utcnow()
+        self._reset_window()
+
+    def _reset_window(self) -> None:
+        self._candle_count:  int = 0
+        self._signal_count:  int = 0
+        self._reject_count:  int = 0
+        # {category: {tf: count}}
+        self._cat_tf: dict[str, dict[str, int]] = defaultdict(lambda: defaultdict(int))
+        # {category: total_count}
+        self._cat_total: dict[str, int] = defaultdict(int)
+
+    def record_candle(self) -> None:
+        """Panggil setiap kali ada candle close (terlepas sinyal atau tidak)."""
+        self._candle_count += 1
+
+    def record_signal(self) -> None:
+        """Panggil setiap kali sinyal berhasil di-generate."""
+        self._signal_count += 1
+
+    def record_reject(
+        self,
+        symbol:    str,
+        tf:        str,
+        raw:       str,
+        df:        pd.DataFrame | None = None,
+    ) -> str:
+        """
+        Catat satu rejection dan kembalikan baris log ringkas untuk dicetak
+        oleh caller (biasanya dengan prefix │ di dalam tree ┌─/└─).
+
+        Format return:
+          "XAUUSD M5  ✗  EMA200_WAJIB     | close=4395.2 EMA200=4412.8 gap=17.6pts (1.1×ATR)"
+        """
+        cat     = _categorize(raw)
+        ctx     = _extract_context(raw, df)
+        tf_pad  = tf.ljust(3)
+        cat_pad = cat.ljust(16)
+
+        line = f"{symbol} {tf_pad} ✗  {cat_pad}"
+        if ctx:
+            if len(ctx) > 100:
+                ctx = ctx[:100].rsplit(" ", 1)[0] + "…"
+            line += f" | {ctx}"
+
+        # Update counter window
+        self._reject_count += 1
+        self._cat_total[cat]   += 1
+        self._cat_tf[cat][tf]  += 1
+
+        return line
+
+    def maybe_print_summary(self, symbol: str = "XAUUSD") -> None:
+        """
+        Cetak summary jika sudah melewati interval (default 30 menit).
+        Panggil di setiap iterasi main loop.
+        """
+        now = datetime.utcnow()
+        if now - self._window_start < self._interval:
+            return
+
+        elapsed = int((now - self._window_start).total_seconds() / 60)
+        self._print_summary(symbol, elapsed)
+        self._window_start = now
+        self._reset_window()
+
+    def _print_summary(self, symbol: str, elapsed_min: int) -> None:
+        """Format dan cetak summary ke terminal + file log."""
+        W = 58  # lebar summary box
+        border = "═" * W
+        divider = "─" * W
+
+        total_reject = self._reject_count
+        total_candle = self._candle_count
+        total_signal = self._signal_count
+
+        lines: list[str] = []
+        lines.append(border)
+        lines.append(
+            f" REJECT SUMMARY  {symbol}  |  {elapsed_min} menit terakhir"
+        )
+        lines.append(border)
+        lines.append(
+            f" Candle close : {total_candle:<4}  "
+            f"Signal : {total_signal:<4}  "
+            f"Reject : {total_reject}"
+        )
+
+        if total_reject == 0:
+            lines.append(divider)
+            lines.append(" Tidak ada rejection — semua candle menghasilkan sinyal atau tidak close")
+            lines.append(border)
+            for l in lines:
+                logger.info(l)
+            return
+
+        lines.append(divider)
+
+        # Sort by count descending
+        sorted_cats = sorted(
+            self._cat_total.items(), key=lambda x: x[1], reverse=True
+        )
+
+        for rank, (cat, count) in enumerate(sorted_cats, 1):
+            pct      = count / total_reject * 100
+            tf_breakdown = self._cat_tf.get(cat, {})
+            tf_str   = "  ".join(
+                f"{tf}={n}"
+                for tf, n in sorted(tf_breakdown.items(), key=lambda x: x[1], reverse=True)
+            )
+            prefix = f" #{rank}" if rank <= 5 else "   "
+            lines.append(
+                f"{prefix}  {cat:<18} {count:>3}x ({pct:4.0f}%)  {tf_str}"
+            )
+
+        # Tuning hint dari kategori paling dominan
+        top_cat = sorted_cats[0][0] if sorted_cats else ""
+        hint    = _HINT.get(top_cat, "")
+        if hint:
+            lines.append(divider)
+            # Wrap hint agar tidak terlalu panjang
+            words  = hint.split()
+            cur    = " Hint: "
+            hint_lines: list[str] = []
+            for w in words:
+                if len(cur) + len(w) + 1 > W - 2:
+                    hint_lines.append(cur)
+                    cur = "        " + w + " "
+                else:
+                    cur += w + " "
+            if cur.strip():
+                hint_lines.append(cur)
+            lines.extend(hint_lines)
+
+        lines.append(border)
+
+        for l in lines:
+            logger.info(l)

@@ -20,7 +20,7 @@ import pytz
 from src.engine.bias import vote_bias
 from src.engine.confluence import confluence_score
 from src.engine.helpers import (
-    _LAST_SIGNAL_TIME, atr_proxy, calc_rr, detect_market_condition,
+    _LAST_SIGNAL_TIME, _save_cooldown, atr_proxy, calc_rr, detect_market_condition,
     detect_trade_mode, latest_closed, reject,
 )
 from src.engine.trigger import counter_trend_valid, trigger_score
@@ -85,7 +85,7 @@ def evaluate_any_tf_mta(
         reject(df_t, f"NOT_ENOUGH_BARS({len(df_t)})"); return None
 
     last          = latest_closed(df_t)
-    close_time_ts = pd.to_datetime(last["time"])
+    close_time_ts = pd.to_datetime(last["time"], utc=True)   # selalu UTC-aware
     close_time    = str(close_time_ts.to_pydatetime().isoformat())
     price_now     = float(last["close"])
     atr           = atr_proxy(df_t)
@@ -158,7 +158,6 @@ def evaluate_any_tf_mta(
         if ok:
             direction, trig_score, trig_notes = dir_try, sc, nt
         else:
-            # Format terstruktur: mudah di-parse oleh _explain_reject()
             if nt.startswith("EMA200-"):
                 reject(df_t, f"EMA200_WAJIB:dir={dir_try}:bias={bias}:comp=[{nt}]:cond={mkt}")
             elif nt.startswith("RSI_OVERSOLD") or nt.startswith("RSI_OVERBOUGHT"):
@@ -239,11 +238,20 @@ def evaluate_any_tf_mta(
             reject(df_t, "CANDLE_CONFIRM_FAIL:dir=SELL"); return None
 
     _LAST_SIGNAL_TIME[key] = close_time_ts
+    _save_cooldown()
     reject(df_t, "OK")
 
     trade_mode, exec_tf = detect_trade_mode(trigger_tf)
     mkt_tag = f" [pasar={mkt}]" if mkt != "normal" else ""
     trig_label = f"{trig_notes}{mkt_tag}"
+
+    current_price = float(last["close"])
+    is_setup_plan = False
+    
+    if direction == "BUY" and current_price > plan.entry_high:
+        is_setup_plan = True  # harga sudah di atas zona → tunggu pullback
+    elif direction == "SELL" and current_price < plan.entry_low:
+        is_setup_plan = True  # harga sudah di bawah zona → tunggu rally
 
     return Signal(
         symbol=symbol, tf=trigger_tf, direction=direction, close_time=close_time,
@@ -262,5 +270,5 @@ def evaluate_any_tf_mta(
         divergence_detail=conf_detail["div_detail"],
         session_name=sess,
         signal_mode="counter_trend" if is_counter else "trend",
-        trade_mode=trade_mode, exec_tf=exec_tf, is_setup_plan=False,
+        trade_mode=trade_mode, exec_tf=exec_tf, is_setup_plan=is_setup_plan,
     )

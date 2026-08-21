@@ -1,12 +1,4 @@
-﻿"""swing_utils.py — Deteksi swing point terpusat.
-
-Sebelumnya duplikat di:
-  - divergence.py  : _swing_lows / _swing_highs (array numpy)
-  - fibonacci.py   : _find_pivot_highs / _find_pivot_lows (DataFrame)
-  - zones_snr.py   : swing_points (DataFrame → list[float])
-
-Modul ini menyediakan satu implementasi tunggal untuk tiap kebutuhan.
-"""
+﻿"""swing_utils.py — Fungsi swing high/low terpadu untuk seluruh engine."""
 
 import numpy as np
 import pandas as pd
