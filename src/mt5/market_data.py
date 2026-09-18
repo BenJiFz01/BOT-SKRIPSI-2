@@ -1,13 +1,54 @@
-﻿"""market_data.py — Ambil data OHLCV dari MetaTrader 5."""
+﻿"""market_data.py — Ambil data OHLCV dari MetaTrader 5.
+
+PENTING — Zona waktu:
+MT5 copy_rates mengembalikan timestamp dalam zona waktu SERVER (misal
+MetaQuotes-Demo = UTC+3 saat musim panas, UTC+2 musim dingin), BUKAN UTC.
+Jika timestamp ini dianggap UTC, semua konversi jam WIB/sesi meleset ~3 jam
+(contoh bug: Asian 11:25 WIB terhitung sebagai London 14:25 WIB).
+
+Solusi: konversi timestamp server ke UTC-naive di sini memakai offset dari
+mt5.terminal_info().timezone (detik dari UTC), dengan override manual via env
+MT5_SERVER_UTC_OFFSET_HOURS bila bank/server aneh.
+"""
+
+import os
 
 import pandas as pd
 import MetaTrader5 as mt5
 
 from src.config.settings import TF_MAP
 
+_OFFSET: int | None = None
+
+
+def _server_utc_offset_seconds() -> int:
+    """Offset zona waktu server MT5 terhadap UTC dalam detik (cache)."""
+    global _OFFSET
+    if _OFFSET is not None:
+        return _OFFSET
+
+    env = os.getenv("MT5_SERVER_UTC_OFFSET_HOURS")
+    if env:
+        try:
+            _OFFSET = int(float(env) * 3600)
+            return _OFFSET
+        except ValueError:
+            pass
+
+    try:
+        info = mt5.terminal_info()
+        _OFFSET = int(getattr(info, "timezone", 0)) if info else 0
+    except Exception:
+        _OFFSET = 0
+    return _OFFSET
+
 
 def fetch_ohlc(symbol: str, tf: str, n_bars: int = 500) -> pd.DataFrame:
-    """Ambil n_bars candle dari MT5 untuk symbol dan timeframe. Raise RuntimeError jika gagal."""
+    """Ambil n_bars candle dari MT5 untuk symbol dan timeframe. Raise RuntimeError jika gagal.
+
+    Timestamp dikonversi ke UTC-naive agar engine (session, cooldown, tampilan WIB)
+    selalu menghitung dengan referensi waktu yang benar.
+    """
     tf_id = TF_MAP.get(tf.upper())
     if tf_id is None:
         raise ValueError(f"Timeframe tidak dikenal: {tf}")
@@ -16,6 +57,9 @@ def fetch_ohlc(symbol: str, tf: str, n_bars: int = 500) -> pd.DataFrame:
         raise RuntimeError(f"Tidak ada data MT5 untuk {symbol} {tf}: {mt5.last_error()}")
     df = pd.DataFrame(rates)
     df["time"] = pd.to_datetime(df["time"], unit="s")
+    offset = _server_utc_offset_seconds()
+    if offset:
+        df["time"] = df["time"] - pd.to_timedelta(offset, unit="s")
     return df
 
 

@@ -1,4 +1,4 @@
-﻿"""swing_utils.py — Fungsi swing high/low terpadu untuk seluruh engine."""
+"""swing_utils.py — Fungsi swing high/low terpadu untuk seluruh engine."""
 
 import numpy as np
 import pandas as pd
@@ -35,29 +35,32 @@ def swing_highs_idx(series: np.ndarray, left: int = 3, right: int = 3) -> list[i
 # Digunakan oleh fibonacci.py — kembalikan (index, harga) untuk pencarian swing.
 
 def pivot_highs(df: pd.DataFrame, window: int = 3) -> list[tuple[int, float]]:
-    """
-    Cari pivot high dari DataFrame OHLC.
+    """Cari pivot high dari DataFrame OHLC.
+
+    Pakai operator strict (>) — mencegah dobel-hit di candle dengan high sama persis,
+    konsisten dengan swing_high_prices() dan fungsi swing lainnya di file ini.
     Returns: list of (bar_index, high_price) diurutkan ascending.
     """
     highs = df["high"].values
     result = []
     for i in range(window, len(highs) - window):
-        if all(highs[i] >= highs[i - j] for j in range(1, window + 1)) and \
-           all(highs[i] >= highs[i + j] for j in range(1, window + 1)):
+        if all(highs[i] > highs[i - j] for j in range(1, window + 1)) and \
+           all(highs[i] > highs[i + j] for j in range(1, window + 1)):
             result.append((i, float(highs[i])))
     return result
 
 
 def pivot_lows(df: pd.DataFrame, window: int = 3) -> list[tuple[int, float]]:
-    """
-    Cari pivot low dari DataFrame OHLC.
+    """Cari pivot low dari DataFrame OHLC.
+
+    Pakai operator strict (<) — konsisten dengan swing_low_prices().
     Returns: list of (bar_index, low_price) diurutkan ascending.
     """
     lows = df["low"].values
     result = []
     for i in range(window, len(lows) - window):
-        if all(lows[i] <= lows[i - j] for j in range(1, window + 1)) and \
-           all(lows[i] <= lows[i + j] for j in range(1, window + 1)):
+        if all(lows[i] < lows[i - j] for j in range(1, window + 1)) and \
+           all(lows[i] < lows[i + j] for j in range(1, window + 1)):
             result.append((i, float(lows[i])))
     return result
 
@@ -94,4 +97,38 @@ def swing_low_prices(df: pd.DataFrame, left: int = 3, right: int = 3) -> list[fl
         if all(lo[i] < lo[i - j] for j in range(1, left + 1)) and \
            all(lo[i] < lo[i + j] for j in range(1, right + 1)):
             result.append(float(lo[i]))
+    return result
+
+
+# ── Idx+Price (S/R freshness) ─────────────────────────────────────────────────
+# Versi dengan indeks — digunakan oleh zones_snr.py untuk menghitung age_bars.
+# Tidak mengganti swing_high_prices / swing_low_prices agar tidak break caller lama.
+
+def swing_high_idx_prices(
+    df: pd.DataFrame, left: int = 3, right: int = 3
+) -> list[tuple[int, float]]:
+    """Kembalikan list (bar_index, price) swing high. bar_index = posisi dalam df."""
+    if len(df) < left + right + 5:
+        return []
+    h = df["high"].to_numpy(dtype=float)
+    result: list[tuple[int, float]] = []
+    for i in range(left, len(df) - right):
+        if all(h[i] > h[i - j] for j in range(1, left + 1)) and \
+           all(h[i] > h[i + j] for j in range(1, right + 1)):
+            result.append((i, float(h[i])))
+    return result
+
+
+def swing_low_idx_prices(
+    df: pd.DataFrame, left: int = 3, right: int = 3
+) -> list[tuple[int, float]]:
+    """Kembalikan list (bar_index, price) swing low. bar_index = posisi dalam df."""
+    if len(df) < left + right + 5:
+        return []
+    lo = df["low"].to_numpy(dtype=float)
+    result: list[tuple[int, float]] = []
+    for i in range(left, len(lo) - right):
+        if all(lo[i] < lo[i - j] for j in range(1, left + 1)) and \
+           all(lo[i] < lo[i + j] for j in range(1, right + 1)):
+            result.append((i, float(lo[i])))
     return result

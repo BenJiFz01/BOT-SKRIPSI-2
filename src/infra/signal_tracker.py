@@ -5,9 +5,12 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Callable
 
+import pandas as pd
 from loguru import logger
 
+
 from src.utils.time_utils import TZ_WIB, parse_dt_safe
+from src.engine.anytf_mta_engine import record_loss, reset_consec_loss
 
 POLL_INTERVAL  = 10
 MAX_DURATION_H = 48
@@ -33,6 +36,7 @@ class TrackedSignal:
     tp2_hit:    bool = False
     tp3_hit:    bool = False
     resolved:   bool = False
+    breakeven_sl: float | None = None  # SL digeser ke breakeven setelah TP1 kena
 
 
 class SignalTracker:
@@ -84,10 +88,22 @@ class SignalTracker:
         entry_low  = float(rec.get("entry_low",  0) or 0) or entry
         entry_high = float(rec.get("entry_high", 0) or 0) or entry
         atr_value  = float(rec.get("atr_value",  0) or 0)
+        direction  = rec.get("direction", "BUY")
+
+        # Fix: untuk sinyal non-setup, entry_zone_hit selalu True.
+        # Entry zone hanya relevan untuk SETUP_PLAN (sinyal limit/pending order).
+        # Untuk sinyal LIVE (langsung eksekusi), harga bisa sudah bergerak jauh
+        # dari entry zone saat bot restart — kalau masih menunggu zona, TP/SL
+        # tidak pernah dimonitor padahal harga sudah melewatinya.
+        if is_setup:
+            entry_zone_hit = False
+        else:
+            entry_zone_hit = True
+
         ts = TrackedSignal(
             signal_id   = sid,
             symbol      = rec.get("symbol", "XAUUSD"),
-            direction   = rec.get("direction", "BUY"),
+            direction   = direction,
             entry       = entry,
             entry_low   = entry_low,
             entry_high  = entry_high,
@@ -98,7 +114,7 @@ class SignalTracker:
             start_time  = parse_dt_safe(rec.get("timestamp", "")),
             atr_value   = atr_value,
             is_setup_plan   = is_setup,
-            entry_zone_hit  = not is_setup,
+            entry_zone_hit  = entry_zone_hit,
         )
         with self._lock:
             self._active[sid] = ts
@@ -109,12 +125,31 @@ class SignalTracker:
             return len(self._active)
 
     def _load_pending_from_logger(self) -> None:
+        """Load sinyal PENDING dari logger saat startup.
+
+        Sinyal yang sudah > 2 jam sejak dibuat dimasukkan ke _startup_signal_ids
+        (notif Telegram diblokir — dianggap sinyal lama, bukan real-time).
+        Sinyal yang < 2 jam TIDAK diblokir sehingga notif TP/SL tetap terkirim
+        meskipun bot sempat restart.
+        """
+        now = datetime.now(tz=TZ_WIB)
+        suppress_threshold_hours = 2
         try:
             for rec in self._logger.get_trackable():
                 self.add_signal(rec)
                 sid = rec.get("signal_id", "")
-                if sid:
+                if not sid:
+                    continue
+                ts_str   = rec.get("timestamp", "")
+                sig_time = parse_dt_safe(ts_str)
+                age_hours = (now - sig_time).total_seconds() / 3600
+                if age_hours > suppress_threshold_hours:
+                    # Sinyal lama (> 2 jam) — suppress notif agar tidak spam
                     self._startup_signal_ids.add(sid)
+                    logger.debug(f"SignalTracker startup: suppress notif {sid} (usia {age_hours:.1f}j)")
+                else:
+                    # Sinyal segar (< 2 jam) — notif tetap aktif setelah restart
+                    logger.debug(f"SignalTracker startup: keep notif {sid} (usia {age_hours:.1f}j)")
         except Exception as e:
             logger.warning(f"SignalTracker: gagal load pending: {e}")
 
@@ -202,7 +237,11 @@ class SignalTracker:
                     self._resolve(ts, "CANCELLED", check_price, now, "SL_BEFORE_ENTRY")
                 return  # belum masuk zona, belum monitor TP
 
-        sl_hit = (is_buy and check_price <= ts.sl) or (not is_buy and check_price >= ts.sl)
+        # Gunakan breakeven SL jika sudah aktif (TP1 sudah kena)
+        # SL efektif = breakeven_sl jika ada, fallback ke SL awal
+        effective_sl = ts.breakeven_sl if ts.breakeven_sl is not None else ts.sl
+        sl_hit = (is_buy and check_price <= effective_sl) or \
+                 (not is_buy and check_price >= effective_sl)
 
         if sl_hit and not ts.tp1_hit:
             self._resolve(ts, "LOSS", check_price, now)
@@ -213,6 +252,16 @@ class SignalTracker:
                 ts.tp1_hit = True
                 self._logger.update_hit_time(ts.signal_id, "tp1", now.strftime("%Y-%m-%dT%H:%M:%S"))
                 self._send_tp_notify("🎯 <b>TP1 TERCAPAI</b>", ts.signal_id, check_price)
+
+                # ── Geser SL ke breakeven setelah TP1 kena ──────────────────
+                # SL breakeven = entry price (ts.entry) sehingga posisi sisa
+                # tidak bisa rugi meski harga balik. Ini menggantikan SL awal.
+                ts.breakeven_sl = ts.entry
+                logger.info(
+                    f"[TRACKER] Breakeven aktif | {ts.signal_id} | "
+                    f"SL lama={ts.sl:.2f} → SL baru={ts.breakeven_sl:.2f} (entry)"
+                )
+
                 if not ts.tp2:
                     self._resolve(ts, "WIN_TP1", check_price, now)
                     return
@@ -254,6 +303,16 @@ class SignalTracker:
         is_new = ts.signal_id not in self._startup_signal_ids
 
         logger.success(f"[TRACKER] {outcome} | {ts.signal_id} | price={price:.2f} | duration={duration_m}m")
+
+        # ── Update consecutive loss / win tracker ────────────────────────────
+        # Key per mode agar loss scalping tidak blokir intraday dan sebaliknya
+        _tf_from_id = ts.signal_id.split("_")[1] if "_" in ts.signal_id else ""
+        _is_scal    = _tf_from_id.upper() in {"M5", "M15"}
+        _cb_key     = f"{ts.symbol}_{'scalping' if _is_scal else 'intraday'}"
+        if outcome == "LOSS":
+            record_loss(_cb_key)
+        elif outcome.startswith("WIN"):
+            reset_consec_loss(_cb_key)
 
         # ── 1. Kirim Telegram DULU sebelum I/O ─────────────────────────────
         # Supaya notif sampai detik itu juga, tidak tertahan operasi file

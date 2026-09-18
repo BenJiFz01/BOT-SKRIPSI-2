@@ -1,5 +1,4 @@
-﻿"""settings.py — Konfigurasi bot dari .env"""
-
+"""settings.py — Konfigurasi bot dari .env"""
 import os
 from dataclasses import dataclass
 
@@ -51,23 +50,23 @@ def _getb(name: str, default: bool) -> bool:
 
 @dataclass(frozen=True)
 class Settings:
-    # ── MT5 ──────────────────────────────────────────────────────────────────
+    # MT5
     mt5_login:         int
     mt5_password:      str
     mt5_server:        str
-    mt5_terminal_path: str   # path ke terminal64.exe, dikonfigurasi via MT5_TERMINAL_PATH
+    mt5_terminal_path: str
 
-    # ── Telegram ─────────────────────────────────────────────────────────────
+    # Telegram
     telegram_token:   str
     telegram_chat_id: str
 
-    # ── Umum ─────────────────────────────────────────────────────────────────
+    # Umum
     symbols:      list[str]
     timeframes:   list[str]
     bars:         int
     poll_seconds: int
 
-    # ── Filter sinyal ─────────────────────────────────────────────────────────
+    # Gate threshold
     min_rr:               float
     min_confirm_votes:    int
     min_trigger_score:    int
@@ -75,74 +74,105 @@ class Settings:
     cooldown_bars:        int
     atr_min_pct:          float
 
-    # ── SL/TP ATR-based ───────────────────────────────────────────────────────
+    # Market Transition (ADX) gate — rileks tapi tetap menyaring
+    # ADX < block  → continuation diblokir (tren terlalu lemah)
+    # ADX < gray   → zona abu-abu, confluence +1 (soft, bukan block)
+    market_transition_adx_block: float
+    market_transition_adx_gray:  float
+
+    # HTF bias vote — diukur dari data historis (2026-09-17):
+    # - Scalping: H4 tidak menolong WR (72% saat H4 netral vs 60% saat H4 ikut
+    #   setuju) → vote cukup H1 saja = lebih rileks & tak ketinggalan momentum.
+    # - Intraday: top-down penuh, H4/top harus si D1 (D1 kini hidup), supaya
+    #   sinyal searah tren besar tanpa menaikkan threshold skor.
+    scalping_h1_only:     bool
+    intraday_require_d1:  bool
+
+    # SL/TP ATR-based
     sl_atr_mult:   float
     tp1_rr:        float
     tp2_rr:        float
     tp3_rr:        float
     max_sl_points: float
 
-    # ── SL/TP Fixed pip ───────────────────────────────────────────────────────
+    # SL/TP Fixed pip (fallback)
     sl_pips:  float
     tp1_pips: float
     tp2_pips: float
     tp3_pips: float
     pip_size: float
 
-    # ── Filter sesi ───────────────────────────────────────────────────────────
+    # Session filter
     session_filter: bool
 
-    # ── Counter trend ─────────────────────────────────────────────────────────
+    # Counter trend
     counter_trend_enabled:  bool
     min_counter_confluence: int
     counter_trend_min_rr:   float
     counter_trend_tfs:      list[str]
 
-    # ── Cap SL per TF ─────────────────────────────────────────────────────────
+    # Cap SL per TF
     max_sl_m5:  float
     max_sl_m15: float
     max_sl_h1:  float
     max_sl_h4:  float
     max_sl_d1:  float
 
-    # ── Scalping mode (M5/M15) ────────────────────────────────────────────────
-    # Catatan: cap SL scalping = max_sl_m5, tidak perlu field tersendiri
+    # Scalping
     scalping_min_trigger_score:    int
     scalping_min_confluence_score: int
+    scalping_atr_min_points:       float  # ATR minimum absolut untuk scalping (poin)
     scalping_sl_atr_mult:          float
-    scalping_cooldown_bars:        int
+    scalping_cooldown_bars:        int   # fallback jika TF-specific tidak ada
+    scalping_cooldown_bars_m5:     int   # cooldown khusus M5
+    scalping_cooldown_bars_m15:    int   # cooldown khusus M15
     scalping_tp1_rr:               float
     scalping_tp2_rr:               float
     scalping_tp3_rr:               float
+    scalping_min_rr:               float
+    # Min RR terpisah untuk scalping counter-trend (berlawanan HTF)
+    # Mencegah: scalping CT pakai counter_trend_min_rr intraday (1.1)
+    # yang lebih tinggi dari scalping_tp1_rr (1.0) → selalu reject
+    scalping_counter_trend_min_rr: float
 
 
 def load_settings() -> Settings:
     symbols = [s.strip() for s in _get("SYMBOLS", "XAUUSD").split(",") if s.strip()]
     tfs     = [_normalize_tf(x) for x in _get("TIMEFRAMES", "M5,M15,H1,H4,D1").split(",") if x.strip()]
 
+    mt5_login = _geti("MT5_LOGIN", 0)
+    if mt5_login <= 0:
+        raise ValueError("Env var wajib tidak valid: MT5_LOGIN harus berupa angka positif")
+
     return Settings(
-        mt5_login         = _geti("MT5_LOGIN", 0),
+        mt5_login         = mt5_login,
         mt5_password      = _get("MT5_PASSWORD"),
         mt5_server        = _get("MT5_SERVER"),
-        mt5_terminal_path = _get(
-            "MT5_TERMINAL_PATH",
-            r"C:\Program Files\MetaTrader 5\terminal64.exe",
-        ),
+        mt5_terminal_path = _get("MT5_TERMINAL_PATH",
+                                  r"C:\Program Files\MetaTrader 5\terminal64.exe"),
 
         telegram_token   = _get("TELEGRAM_BOT_TOKEN"),
         telegram_chat_id = _get("TELEGRAM_CHAT_ID"),
 
         symbols      = symbols,
         timeframes   = tfs,
-        bars         = _geti("BARS", 800),
+        bars         = _geti("BARS",         800),
         poll_seconds = _geti("POLL_SECONDS", 5),
 
         min_rr               = _getf("MIN_RR",               1.5),
-        min_confirm_votes    = _geti("MIN_CONFIRM_VOTES",     2),
+        min_confirm_votes    = _geti("MIN_CONFIRM_VOTES",     1),
         min_trigger_score    = _geti("MIN_TRIGGER_SCORE",     4),
         min_confluence_score = _geti("MIN_CONFLUENCE_SCORE",  2),
         cooldown_bars        = _geti("COOLDOWN_BARS",         3),
         atr_min_pct          = _getf("ATR_MIN_PCT",           0.0006),
+
+        # Rileks dari 18/23: 15/25 — jangan blokir awal tren (ADX rendah
+        # = tren baru mulai = momen momentum tertangkap).
+        market_transition_adx_block = _getf("MARKET_TRANSITION_ADX_BLOCK", 15.0),
+        market_transition_adx_gray  = _getf("MARKET_TRANSITION_ADX_GRAY",  25.0),
+
+        scalping_h1_only    = _getb("SCALPING_H1_ONLY",   True),
+        intraday_require_d1 = _getb("INTRADAY_REQUIRE_D1", True),
 
         sl_atr_mult   = _getf("SL_ATR_MULT",    1.5),
         tp1_rr        = _getf("TP1_RR",         1.5),
@@ -163,21 +193,27 @@ def load_settings() -> Settings:
         counter_trend_min_rr   = _getf("COUNTER_TREND_MIN_RR",   2.0),
         counter_trend_tfs      = [
             t.strip().upper()
-            for t in _get("COUNTER_TREND_TFS", "H1,H4").split(",")
-            if t.strip()
+            for t in _get("COUNTER_TREND_TFS", "H1,H4").split(",") if t.strip()
         ],
 
-        max_sl_m5  = _getf("MAX_SL_M5",   5.0),
-        max_sl_m15 = _getf("MAX_SL_M15",  5.0),
-        max_sl_h1  = _getf("MAX_SL_H1",  15.0),
-        max_sl_h4  = _getf("MAX_SL_H4",  30.0),
-        max_sl_d1  = _getf("MAX_SL_D1",  50.0),
+        max_sl_m5  = _getf("MAX_SL_M5",   15.0),
+        max_sl_m15 = _getf("MAX_SL_M15",  20.0),
+        max_sl_h1  = _getf("MAX_SL_H1",   40.0),
+        max_sl_h4  = _getf("MAX_SL_H4",   60.0),
+        max_sl_d1  = _getf("MAX_SL_D1",  100.0),
 
         scalping_min_trigger_score    = _geti("SCALPING_MIN_TRIGGER_SCORE",    3),
-        scalping_min_confluence_score = _geti("SCALPING_MIN_CONFLUENCE_SCORE", 1),
+        scalping_min_confluence_score = _geti("SCALPING_MIN_CONFLUENCE_SCORE", 2),
+        scalping_atr_min_points       = _getf("SCALPING_ATR_MIN_POINTS",       5.0),
         scalping_sl_atr_mult          = _getf("SCALPING_SL_ATR_MULT",          1.2),
         scalping_cooldown_bars        = _geti("SCALPING_COOLDOWN_BARS",        5),
-        scalping_tp1_rr               = _getf("SCALPING_TP1_RR",               1.5),
-        scalping_tp2_rr               = _getf("SCALPING_TP2_RR",               2.0),
-        scalping_tp3_rr               = _getf("SCALPING_TP3_RR",               2.5),
+        scalping_cooldown_bars_m5     = _geti("SCALPING_COOLDOWN_BARS_M5",     9),
+        scalping_cooldown_bars_m15    = _geti("SCALPING_COOLDOWN_BARS_M15",    5),
+        scalping_tp1_rr               = _getf("SCALPING_TP1_RR",               1.0),
+        scalping_tp2_rr               = _getf("SCALPING_TP2_RR",               1.6),
+        scalping_tp3_rr               = _getf("SCALPING_TP3_RR",               2.6),
+        scalping_min_rr               = _getf("SCALPING_MIN_RR",               1.0),
+        # >= SCALPING_TP1_RR supaya gate RR selalu lolos (rr = TP1_RR)
+        # .env bisa override ke nilai lebih ketat (misal 1.5) untuk scalping CT
+        scalping_counter_trend_min_rr = _getf("SCALPING_COUNTER_TREND_MIN_RR", 1.5),
     )

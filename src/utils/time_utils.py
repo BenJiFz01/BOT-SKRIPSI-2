@@ -37,18 +37,32 @@ def iso_to_wib_str(iso_str: str, fmt: str = "%Y-%m-%d %H:%M WIB") -> str:
     Konversi string ISO datetime ke string WIB yang dapat dibaca.
 
     Args:
-        iso_str: String datetime format ISO, misal '2024-01-15T08:30:00'.
+        iso_str: String datetime format ISO, misal '2024-01-15T08:30:00+00:00'.
         fmt:     Format output. Default: '%Y-%m-%d %H:%M WIB'.
 
     Returns:
         String waktu dalam WIB, atau iso_str asli jika parsing gagal.
+
+    Aturan konversi:
+      - Ada offset timezone (mis. '...T05:15:00+00:00') → dikonversi ke WIB.
+      - Naive tanpa offset → diasumsikan sudah WIB (diisi tzinfo WIB), diformat apa adanya.
     """
     if not iso_str:
         return ""
     try:
-        # Ambil 19 karakter pertama saja (YYYY-MM-DDTHH:MM:SS) untuk toleran
-        dt = datetime.fromisoformat(iso_str[:19])
-        return to_wib(dt).strftime(fmt)
+        dt = datetime.fromisoformat(iso_str)
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=TZ_WIB)
+        else:
+            dt = dt.astimezone(TZ_WIB)
+        return dt.strftime(fmt)
+    except ValueError:
+        # Fallback untuk format lama yang gagal di fromisoformat (mis. separator spasi/std).
+        try:
+            dt = datetime.fromisoformat(iso_str[:19])
+            return dt.replace(tzinfo=TZ_WIB).strftime(fmt)
+        except Exception:
+            return iso_str[:19]
     except Exception:
         return iso_str[:19]
 

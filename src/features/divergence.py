@@ -1,25 +1,36 @@
-﻿"""divergence.py — Deteksi RSI dan MACD Histogram divergence."""
-
+"""divergence.py — Deteksi RSI dan MACD Histogram divergence."""
 import numpy as np
 
 from src.features.swing_utils import swing_highs_idx, swing_lows_idx
+
+_LOOKBACK_MAP: dict[str, int] = {
+    "M1": 150, "M5": 120, "M15": 100, "M30": 80,
+    "H1": 80,  "H4": 60,  "D1":  40,
+}
+_LOOKBACK_DEFAULT = 100
+
+_LEFT_RIGHT_MAP: dict[str, tuple[int, int]] = {
+    "M1": (3, 3), "M5": (3, 3), "M15": (4, 4), "M30": (4, 4),
+    "H1": (5, 5), "H4": (5, 5), "D1":  (5, 5),
+}
+_LEFT_RIGHT_DEFAULT = (4, 4)
+
+
+def lookback_for_tf(tf: str) -> int:
+    return _LOOKBACK_MAP.get(tf.upper(), _LOOKBACK_DEFAULT)
+
+
+def left_right_for_tf(tf: str) -> tuple[int, int]:
+    return _LEFT_RIGHT_MAP.get(tf.upper(), _LEFT_RIGHT_DEFAULT)
 
 
 def _detect_divergence(
     close:     np.ndarray,
     indicator: np.ndarray,
-    lookback:  int = 50,
-    left:      int = 3,
-    right:     int = 3,
+    lookback:  int = 100,
+    left:      int = 4,
+    right:     int = 4,
 ) -> tuple[np.ndarray, np.ndarray]:
-    """
-    Deteksi divergence bullish dan bearish secara generik.
-
-    Bullish divergence : harga membuat lower low, indikator membuat higher low.
-    Bearish divergence : harga membuat higher high, indikator membuat lower high.
-
-    Returns (bull_array, bear_array) — boolean array sepanjang `close`.
-    """
     n    = len(close)
     bull = np.zeros(n, dtype=bool)
     bear = np.zeros(n, dtype=bool)
@@ -57,20 +68,24 @@ def _detect_divergence(
 def detect_rsi_divergence(
     close:    np.ndarray,
     rsi:      np.ndarray,
-    lookback: int = 50,
-    left:     int = 3,
-    right:    int = 3,
+    lookback: int = 0,
+    left:     int = 0,
+    right:    int = 0,
+    tf:       str = "",
 ) -> tuple[np.ndarray, np.ndarray]:
-    """Deteksi RSI divergence bullish dan bearish. Returns (bull_array, bear_array)."""
-    return _detect_divergence(close, rsi, lookback, left, right)
+    lb = lookback if lookback > 0 else (lookback_for_tf(tf) if tf else _LOOKBACK_DEFAULT)
+    lr = (left, right) if left > 0 and right > 0 else (left_right_for_tf(tf) if tf else _LEFT_RIGHT_DEFAULT)
+    return _detect_divergence(close, rsi, lb, lr[0], lr[1])
 
 
 def detect_macd_divergence(
     close:    np.ndarray,
     macdhist: np.ndarray,
-    lookback: int = 50,
-    left:     int = 3,
-    right:    int = 3,
+    lookback: int = 0,
+    left:     int = 0,
+    right:    int = 0,
+    tf:       str = "",
 ) -> tuple[np.ndarray, np.ndarray]:
-    """Deteksi MACD Histogram divergence bullish dan bearish. Returns (bull_array, bear_array)."""
-    return _detect_divergence(close, macdhist, lookback, left, right)
+    lb = lookback if lookback > 0 else (lookback_for_tf(tf) if tf else _LOOKBACK_DEFAULT)
+    lr = (left, right) if left > 0 and right > 0 else (left_right_for_tf(tf) if tf else _LEFT_RIGHT_DEFAULT)
+    return _detect_divergence(close, macdhist, lb, lr[0], lr[1])

@@ -1,0 +1,31 @@
+# Requirements — Bot Trading DSS Forex
+# Python 3.10+, Windows (diperlukan untuk MetaTrader5)
+#
+# PERHATIAN — TA-Lib:
+#   TA-Lib TIDAK tersedia langsung via pip.
+#   Download wheel yang sesuai versi Python & arsitektur dari:
+#   https://github.com/cgohlke/talib-build/releases
+#   Untuk Python 3.10 64-bit: ta_lib-0.6.8-cp310-cp310-win_amd64.whl
+#   Install manual: pip install ta_lib-0.6.8-cp310-cp310-win_amd64.whl
+
+annotated-types==0.7.0
+certifi==2025.11.12
+charset-normalizer==3.4.4
+colorama==0.4.6
+et_xmlfile==2.0.0
+idna==3.11
+loguru==0.7.3
+metatrader5==5.0.5430
+numpy==2.2.6
+openpyxl==3.1.5
+pandas==2.3.3
+pydantic==2.12.5
+pydantic_core==2.41.5
+python-dateutil==2.9.0.post0
+python-dotenv==1.2.1
+pytz==2025.2
+requests==2.32.5
+six==1.17.0
+tzdata==2025.3
+urllib3==2.6.2
+win32_setctime==1.2.0

@@ -2,6 +2,7 @@
 
 import csv
 import json
+import threading
 from dataclasses import asdict, dataclass
 from datetime import datetime
 from pathlib import Path
@@ -102,7 +103,12 @@ def _make_signal_id(symbol: str, tf: str, timestamp: str) -> str:
 
 
 class SignalLogger:
-    """Pencatat histori sinyal ke CSV dan JSON."""
+    """Pencatat histori sinyal ke CSV dan JSON.
+
+    Thread-safe: semua operasi baca/tulis file dilindungi _lock
+    untuk mencegah race condition antara main loop dan SignalTracker
+    yang bisa menyebabkan JSON corrupt (double-closing brace, dll).
+    """
 
     def __init__(
         self,
@@ -111,12 +117,14 @@ class SignalLogger:
     ) -> None:
         self.csv_path  = Path(csv_path)
         self.json_path = Path(json_path)
+        self._lock     = threading.Lock()   # satu lock untuk JSON + CSV
         self.csv_path.parent.mkdir(parents=True, exist_ok=True)
         if not self.csv_path.exists():
             with open(self.csv_path, "w", newline="", encoding="utf-8") as f:
                 csv.DictWriter(f, fieldnames=CSV_FIELDS).writeheader()
 
     def _load(self) -> dict[str, dict]:
+        """Load JSON — harus dipanggil di dalam _lock."""
         if not self.json_path.exists():
             return {}
         try:
@@ -126,15 +134,25 @@ class SignalLogger:
             return {}
 
     def _save(self, data: dict[str, dict]) -> None:
-        with open(self.json_path, "w", encoding="utf-8") as f:
+        """Tulis JSON atomic — harus dipanggil di dalam _lock.
+
+        Tulis ke file .tmp dulu, baru rename ke file asli.
+        Ini mencegah file terpotong setengah jika proses crash saat nulis.
+        """
+        tmp = self.json_path.with_suffix(".tmp")
+        with open(tmp, "w", encoding="utf-8") as f:
             json.dump(data, f, indent=2, ensure_ascii=False)
+        tmp.replace(self.json_path)   # atomic pada Windows NTFS
 
     def _rewrite_csv(self, data: dict[str, dict]) -> None:
-        with open(self.csv_path, "w", newline="", encoding="utf-8") as f:
+        """Tulis ulang CSV — harus dipanggil di dalam _lock."""
+        tmp = self.csv_path.with_suffix(".tmp")
+        with open(tmp, "w", newline="", encoding="utf-8") as f:
             w = csv.DictWriter(f, fieldnames=CSV_FIELDS)
             w.writeheader()
             for rec in data.values():
                 w.writerow({k: rec.get(k, "") for k in CSV_FIELDS})
+        tmp.replace(self.csv_path)
 
     def log_signal(self, sig: Signal) -> str:
         """Catat sinyal baru ke CSV dan JSON. Return signal_id."""
@@ -148,7 +166,7 @@ class SignalLogger:
             symbol            = sig.symbol,
             timeframe         = sig.tf,
             direction         = sig.direction,
-            signal_mode       = getattr(sig, "signal_mode",   "trend"),
+            signal_mode       = getattr(sig, "signal_mode",   "CONTINUATION"),
             trade_mode        = getattr(sig, "trade_mode",    "intraday"),
             is_setup_plan     = is_setup,
             exec_tf           = getattr(sig, "exec_tf",       ""),
@@ -160,7 +178,7 @@ class SignalLogger:
             tp3               = round(sig.tp3, 5) if sig.tp3 is not None else 0.0,
             rr                = round(sig.rr,  2) if sig.rr  is not None else 0.0,
             trigger_score     = f"{sig.trigger_score}/{sig.trigger_max}",
-            confluence_score  = f"{sig.confluence_score}/{sig.confluence_max}",
+            confluence_score  = f"{sig.confluence_score}",
             htf_bias          = sig.htf_bias,
             trigger_notes     = sig.trigger_notes,
             confluence_notes  = sig.confluence_notes,
@@ -175,28 +193,29 @@ class SignalLogger:
             outcome           = "SETUP" if is_setup else "PENDING",
         )
 
-        with open(self.csv_path, "a", newline="", encoding="utf-8") as f:
-            csv.DictWriter(f, fieldnames=CSV_FIELDS).writerow(
-                {k: getattr(rec, k, "") for k in CSV_FIELDS}
-            )
-
-        data = self._load()
-        data[sid] = asdict(rec)
-        self._save(data)
+        with self._lock:
+            with open(self.csv_path, "a", newline="", encoding="utf-8") as f:
+                csv.DictWriter(f, fieldnames=CSV_FIELDS).writerow(
+                    {k: getattr(rec, k, "") for k in CSV_FIELDS}
+                )
+            data = self._load()
+            data[sid] = asdict(rec)
+            self._save(data)
         return sid
 
     def update_hit_time(self, signal_id: str, level: str, hit_time: str) -> bool:
         """Catat waktu TP/SL tersentuh. level = 'tp1'|'tp2'|'tp3'|'sl'."""
-        data = self._load()
-        if signal_id not in data:
-            return False
         field = {"tp1": "tp1_hit_time", "tp2": "tp2_hit_time",
                  "tp3": "tp3_hit_time", "sl": "sl_hit_time"}.get(level.lower())
         if not field:
             return False
-        data[signal_id][field] = hit_time
-        self._save(data)
-        self._rewrite_csv(data)
+        with self._lock:
+            data = self._load()
+            if signal_id not in data:
+                return False
+            data[signal_id][field] = hit_time
+            self._save(data)
+            self._rewrite_csv(data)
         return True
 
     def update_outcome(
@@ -208,41 +227,45 @@ class SignalLogger:
         duration_m: int   = 0,
     ) -> bool:
         """Update hasil akhir sinyal."""
-        data = self._load()
-        if signal_id not in data:
-            return False
-        rec = data[signal_id]
-        rec["outcome"]       = outcome
-        rec["outcome_price"] = price
-        rec["outcome_time"]  = now_wib_str()
-        rec["notes"]         = notes
-        if duration_m > 0:
-            rec["duration_minutes"] = duration_m
-        elif rec.get("timestamp") and not rec.get("duration_minutes"):
-            try:
-                ts = rec["timestamp"]
-                dt_sig = datetime.fromisoformat(ts)
-                if dt_sig.tzinfo is None:
-                    dt_sig = dt_sig.replace(tzinfo=TZ_WIB)
-                dur = int((datetime.now(tz=TZ_WIB) - dt_sig).total_seconds() / 60)
-                rec["duration_minutes"] = dur
-            except Exception:
-                pass
-        if outcome == "LOSS" and not rec.get("sl_hit_time"):
-            rec["sl_hit_time"] = rec["outcome_time"]
-        self._save(data)
-        self._rewrite_csv(data)
+        with self._lock:
+            data = self._load()
+            if signal_id not in data:
+                return False
+            rec = data[signal_id]
+            rec["outcome"]       = outcome
+            rec["outcome_price"] = price
+            rec["outcome_time"]  = now_wib_str()
+            rec["notes"]         = notes
+            if duration_m > 0:
+                rec["duration_minutes"] = duration_m
+            elif rec.get("timestamp") and not rec.get("duration_minutes"):
+                try:
+                    ts = rec["timestamp"]
+                    dt_sig = datetime.fromisoformat(ts)
+                    if dt_sig.tzinfo is None:
+                        dt_sig = dt_sig.replace(tzinfo=TZ_WIB)
+                    dur = int((datetime.now(tz=TZ_WIB) - dt_sig).total_seconds() / 60)
+                    rec["duration_minutes"] = dur
+                except Exception:
+                    pass
+            if outcome == "LOSS" and not rec.get("sl_hit_time"):
+                rec["sl_hit_time"] = rec["outcome_time"]
+            self._save(data)
+            self._rewrite_csv(data)
         return True
 
     def get_all_records(self) -> list[dict]:
-        return list(self._load().values())
+        with self._lock:
+            return list(self._load().values())
 
     def get_trackable(self) -> list[dict]:
         """Semua sinyal yang perlu dimonitor: PENDING (live) + SETUP (setup plan)."""
-        return [r for r in self.get_all_records() if r.get("outcome") in ("PENDING", "SETUP")]
+        with self._lock:
+            return [r for r in self._load().values() if r.get("outcome") in ("PENDING", "SETUP")]
 
     def get_by_id(self, signal_id: str) -> dict | None:
-        return self._load().get(signal_id)
+        with self._lock:
+            return self._load().get(signal_id)
 
     def get_stats(self) -> dict:
         """Statistik hanya dari sinyal terkonfirmasi (bukan setup plan)."""
@@ -262,7 +285,7 @@ class SignalLogger:
             outcome = rec.get("outcome", "PENDING")
             tf      = rec.get("timeframe", "?")
             direc   = rec.get("direction", "?")
-            mode    = rec.get("signal_mode", "trend")
+            mode    = rec.get("signal_mode", "CONTINUATION")
             rr      = float(rec.get("rr", 0) or 0)
             dur     = int(rec.get("duration_minutes", 0) or 0)
 

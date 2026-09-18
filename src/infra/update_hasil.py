@@ -1,5 +1,4 @@
 ﻿"""update_hasil.py — CLI interaktif untuk update hasil sinyal (WIN/LOSS).
-
 Jalankan: python -m src.infra.update_hasil
 """
 
@@ -61,7 +60,7 @@ def show_detail(signal_id: str) -> None:
 
     outcome = rec.get("outcome", "PENDING")
     icon    = {"WIN_TP1":"✅","WIN_TP2":"✅✅","WIN_TP3":"✅✅✅","LOSS":"❌","PENDING":"⏳","CANCELLED":"⚠️"}.get(outcome, "?")
-    mode    = "Counter Trend" if rec.get("signal_mode") == "counter_trend" else "Trend Following"
+    mode    = "Reversal" if rec.get("signal_mode") == "REVERSAL" else "Trend Following"
 
     print(f"\n{_SEP}\n  DETAIL SINYAL: {signal_id}\n{_SEP}")
     print(f"  Waktu    : {rec.get('timestamp','')}  |  Candle: {rec.get('candle_close','')}")
@@ -113,7 +112,7 @@ def show_stats() -> None:
         for mode, d in s["by_mode"].items():
             dec   = d["win"] + d["loss"]
             wr    = round(d["win"] / dec * 100, 1) if dec > 0 else 0
-            label = "Counter Trend" if mode == "counter_trend" else "Trend"
+            label = "Reversal" if mode == "REVERSAL" else "Trend"
             print(f"    {label:<14}: {d['win']}W {d['loss']}L ({wr}%)")
     print(f"{_SEP}\n")
 
@@ -127,7 +126,7 @@ def show_tracker_status() -> None:
     print(f"  {'No':<4} {'ID Sinyal':<38} {'Entry':>9} {'SL':>9} {'TP1':>9} {'Mode':<14}")
     print(_SEP2)
     for i, r in enumerate(pending, 1):
-        mode = "Counter" if r.get("signal_mode") == "counter_trend" else "Trend"
+        mode = "Reversal" if r.get("signal_mode") == "REVERSAL" else "Trend"
         print(f"  {i:<4} {r.get('signal_id','?'):<38} {float(r.get('entry',0)):>9.2f} "
               f"{float(r.get('sl',0)):>9.2f} {float(r.get('tp1',0)):>9.2f} {mode:<14}")
     print(_SEP2)

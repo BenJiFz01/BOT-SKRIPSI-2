@@ -87,9 +87,9 @@ def sheet_ringkasan(wb, stats: dict, records: list[dict]) -> None:
 
     by_mode = stats.get("by_mode", {})
     if by_mode:
-        section("D.  TREND vs COUNTER TREND")
+        section("D.  TREND vs REVERSAL")
         for mode, d in by_mode.items():
-            label = "Counter Trend" if mode == "counter_trend" else "Trend Following"
+            label = "Reversal" if mode == "REVERSAL" else "Trend Following"
             dec   = d["win"] + d["loss"]
             wr    = round(d["win"] / dec * 100, 1) if dec > 0 else 0.0
             data_row(f"{label} — Total",    d["total"])
@@ -206,9 +206,9 @@ def sheet_semua_sinyal(wb, records: list[dict]) -> None:
         if outcome in ("WIN_TP1", "WIN_TP2", "WIN_TP3"): row_bg = C_WIN
         elif outcome == "LOSS":                            row_bg = C_LOSS
         elif outcome == "PENDING":                         row_bg = C_PENDING
-        else:                                              row_bg = C_COUNTER if rec.get("signal_mode") == "counter_trend" else None
+        else:                                              row_bg = C_COUNTER if rec.get("signal_mode") == "REVERSAL" else None
 
-        mode = "Counter" if rec.get("signal_mode") == "counter_trend" else "Trend"
+        mode = "Reversal" if rec.get("signal_mode") == "REVERSAL" else "Trend"
         vals = [
             idx, rec.get("signal_id",""), iso_to_wib_excel(rec.get("timestamp","")),
             rec.get("symbol",""), rec.get("timeframe",""), rec.get("direction",""), mode,
@@ -295,12 +295,12 @@ def sheet_trend_vs_counter(wb, stats: dict) -> None:
     for i, w in enumerate([18,8,8,8,8,14,40], 1):
         ws.column_dimensions[get_column_letter(i)].width = w
     r = 3
-    labels = {"trend": "Trend Following", "counter_trend": "Counter Trend"}
-    notes  = {"trend": "Mengikuti arah HTF bias", "counter_trend": "Melawan HTF bias — wajib divergence"}
+    labels = {"CONTINUATION": "Trend Following", "REVERSAL": "Reversal", "BREAKOUT": "Breakout"}
+    notes  = {"CONTINUATION": "Mengikuti arah HTF bias", "REVERSAL": "Melawan HTF bias", "BREAKOUT": "Breakout momentum"}
     for mode, d in by_mode.items():
         dec  = d["win"] + d["loss"]
         wr   = round(d["win"] / dec * 100, 1) if dec > 0 else 0.0
-        bg   = C_COUNTER if mode == "counter_trend" else None
+        bg   = C_COUNTER if mode == "REVERSAL" else None
         for col, val in enumerate([labels.get(mode,mode), d["total"], d["win"], d["loss"], d["pending"], wr, notes.get(mode,"")], 1):
             set_cell(ws, r, col, val, bg=bg)
         r += 1

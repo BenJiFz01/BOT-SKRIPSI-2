@@ -46,3 +46,13 @@ desktop.ini
 test_out.txt
 test_err.txt
 _skripsi_extract.txt
+DEPLOY_CHECKLIST.md
+deploy_to_vps.ps1
+laporan_trading 3.xlsx
+signal_history_backup_before_cleanup.csv
+setup_autostart.ps1
+start_bot.bat
+.kiro/notes/pending_tweaks.md
+.gitignore
+.kiro/notes/reversal_improvement.md
+.kiro/notes/quality_improvement_tweaks.md

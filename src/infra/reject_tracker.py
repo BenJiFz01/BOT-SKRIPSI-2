@@ -30,7 +30,22 @@ from datetime import datetime, timedelta
 import pandas as pd
 from loguru import logger
 
-from src.engine.helpers import atr_proxy, safe
+
+def _atr_proxy(df: pd.DataFrame, n: int = 14) -> float:
+    if "atr_14" in df.columns:
+        v = df["atr_14"].iloc[-2]
+        if pd.notna(v) and float(v) > 0:
+            return float(v)
+    if len(df) < 3:
+        return 0.0
+    w = df.iloc[-n:] if len(df) > n else df
+    v = (w["high"].astype(float) - w["low"].astype(float)).mean()
+    return float(v) if pd.notna(v) and v > 0 else 0.0
+
+
+def _safe(row: pd.Series, col: str) -> float | None:
+    v = row.get(col)
+    return None if (v is None or pd.isna(v)) else float(v)
 
 _SUMMARY_INTERVAL_MIN = 30
 
@@ -58,6 +73,15 @@ _CATEGORY: dict[str, str] = {
     "NOT_ENOUGH_BARS":    "DATA_KURANG",
     "COOLDOWN":           "COOLDOWN",
     "SLTP_NONE":          "SLTP_ERROR",
+    "OUT_OF_SESSION":     "OUT_OF_SESSION",
+    "LATE_ENTRY":         "LATE_ENTRY",
+    "ASIAN_NO_KEY_LEVEL": "ASIAN_GATE",
+    "SNR_BLOCKED":        "SNR_BLOCKED",
+    "SNR_WEAK":           "SNR_BLOCKED",
+    "DAILY_LIMIT":        "DAILY_LIMIT",
+    "DAILY_LIMIT_SCALPING":  "DAILY_LIMIT",
+    "DAILY_LIMIT_INTRADAY":  "DAILY_LIMIT",
+    "MARKET_TRANSITION":  "MARKET_TRANSITION",
 }
 
 # Hint tuning per kategori dominan
@@ -106,6 +130,36 @@ _HINT: dict[str, str] = {
     "NEWS_SPIKE":  "Spike news — sistem sengaja skip. Benar.",
     "DATA_KURANG": "Data bar belum cukup — tunggu lebih banyak candle terkumpul.",
     "SLTP_ERROR":  "SL/TP gagal dihitung — kemungkinan data price bermasalah. Cek koneksi MT5.",
+    "OUT_OF_SESSION": (
+        "Di luar jam sesi aktif (02:00-06:00 WIB). Normal di akhir malam/dini hari. "
+        "Tidak perlu tuning — bot akan aktif kembali saat sesi buka."
+    ),
+    "LATE_ENTRY": (
+        "Harga sudah terlalu jauh dari candle trigger (>1.5×ATR). "
+        "Entry yang 'chasing' rawan kena SL dari retracement wajar. "
+        "Ini filter yang benar — tidak perlu dilemahkan."
+    ),
+    "ASIAN_GATE": (
+        "Scalping di sesi Asian tanpa konfirmasi level SNR/SND kunci. "
+        "Sesuai desain — Asian lebih choppy, wajib ada level struktural. "
+        "Jika terlalu sering, pertimbangkan naikkan near_factor SNR/SND."
+    ),
+    "SNR_BLOCKED": (
+        "Jalur ke TP terblokir level SNR, atau level SNR terlalu lemah (2-touch). "
+        "Ini filter kualitas yang benar — level 2-touch akurasi historis hanya 31.6%. "
+        "Tidak perlu dilemahkan."
+    ),
+    "DAILY_LIMIT": (
+        "Circuit breaker aktif — terlalu banyak loss beruntun untuk symbol ini. "
+        "Bot pause generate sinyal baru sampai ada WIN atau reset hari baru. "
+        "Ini proteksi modal yang benar."
+    ),
+    "MARKET_TRANSITION": (
+        "ADX di TF penentu bias (H1/H4) di bawah ambang block "
+        "(MARKET_TRANSITION_ADX_BLOCK, default 15). "
+        "Sistem menunda Continuation signal sesuai PRD 'Range/Transition → NO SIGNAL'. "
+        "Jika terlalu sering, turunkan ambang block atau cek apakah D1 sudah beri bias."
+    ),
 }
 
 
@@ -138,8 +192,8 @@ def _extract_context(raw: str, df: pd.DataFrame | None) -> str:
             try:
                 last   = df.iloc[-2]
                 close  = float(last.get("close", 0))
-                ema200 = safe(last, "ema_200")
-                atr    = atr_proxy(df)
+                ema200 = _safe(last, "ema_200")
+                atr    = _atr_proxy(df)
                 if ema200 and atr > 0:
                     gap      = abs(close - ema200)
                     atr_mul  = gap / atr
@@ -249,6 +303,44 @@ def _extract_context(raw: str, df: pd.DataFrame | None) -> str:
         m = re.search(r"\(([^)]+)\)", raw)
         if m:
             return f"tunggu {m.group(1)}"
+
+    # LATE_ENTRY: tampilkan jarak vs maksimum
+    if raw_up.startswith("LATE_ENTRY"):
+        dist = re.search(r"dist=([0-9.]+)", raw)
+        mx   = re.search(r"max=([0-9.]+)", raw)
+        if dist and mx:
+            return f"jarak={dist.group(1)} max={mx.group(1)}"
+
+    # OUT_OF_SESSION: tampilkan nama sesi
+    if raw_up.startswith("OUT_OF_SESSION"):
+        m = re.search(r"\(([^)]+)\)", raw)
+        if m:
+            return f"sesi={m.group(1)}"
+
+    # ASIAN_NO_KEY_LEVEL: tampilkan komponen confluence
+    if raw_up.startswith("ASIAN_NO_KEY_LEVEL"):
+        m = re.search(r"\[([^\]]+)\]", raw)
+        if m:
+            return m.group(1)[:60]
+
+    # SNR_BLOCKED / SNR_WEAK: tampilkan detail zona
+    if raw_up.startswith("SNR_BLOCKED") or raw_up.startswith("SNR_WEAK"):
+        m = re.search(r"\(([^)]+)\)", raw)
+        if m:
+            return m.group(1)[:60]
+
+    # DAILY_LIMIT: tampilkan count loss beruntun dan mode
+    if raw_up.startswith("DAILY_LIMIT"):
+        mode = "scalping" if "SCALPING" in raw_up else "intraday"
+        m = re.search(r"\(([^)]+)\)", raw)
+        detail = m.group(1) if m else ""
+        return f"{mode}: {detail}"
+
+    # MARKET_TRANSITION: tampilkan ADX dan TF penentu
+    if raw_up.startswith("MARKET_TRANSITION"):
+        adx = re.search(r"adx_(\w+)=([0-9.]+)", raw)
+        if adx:
+            return f"ADX {adx.group(1)}={adx.group(2)} di bawah ambang block (bawaan 15)"
 
     return ""
 

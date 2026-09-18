@@ -9,22 +9,6 @@ import MetaTrader5 as mt5
 
 
 def connect(login: int, password: str, server: str, terminal_path: str = "") -> object:
-    """
-    Inisialisasi dan login ke MT5.
-
-    Args:
-        login:         Nomor akun MT5.
-        password:      Password akun.
-        server:        Nama broker server.
-        terminal_path: Path ke terminal64.exe. Jika kosong, baca dari env MT5_TERMINAL_PATH,
-                       fallback ke path default Windows.
-
-    Raises:
-        RuntimeError: jika terminal tidak ditemukan, initialize gagal, atau login gagal.
-
-    Returns:
-        AccountInfo object dari mt5.account_info().
-    """
     path = (
         terminal_path
         or os.environ.get("MT5_TERMINAL_PATH", "")
@@ -42,7 +26,6 @@ def connect(login: int, password: str, server: str, terminal_path: str = "") -> 
     if info is None:
         raise RuntimeError(f"MT5 account_info gagal: {mt5.last_error()}")
     return info
-
 
 def shutdown() -> None:
     """Tutup koneksi MT5 dengan aman."""
