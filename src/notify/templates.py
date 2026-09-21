@@ -12,6 +12,29 @@ _MODE_TAG: dict[str, str] = {
 }
 
 
+def _rr_label(sig: Signal, tp: float | None) -> str:
+    """Label RR per TP sesuai jarak harga sesungguhnya (entry_ref → TP).
+
+    TP1 dipakai sig.rr (realisasi TP1 dari gate engine). TP2 dipakai
+    sig.rr_tp2_actual (RR struktural/runner — acuan gate). TP3 dihitung
+    dari harga karena tidak disimpan terpisah. Fallback ke perhitungan
+    langsung dari harga agar konsisten.
+    """
+    if tp is None or tp <= 0 or sig.sl is None or sig.sl <= 0:
+        return "—"
+    entry = (sig.entry_high or sig.entry) if sig.direction == "BUY" else (sig.entry_low or sig.entry)
+    if not entry:
+        return "—"
+    if tp == sig.tp and sig.rr is not None:
+        return f"{sig.rr:.2f}R"
+    if tp == sig.tp2 and sig.rr_tp2_actual > 0:
+        return f"{sig.rr_tp2_actual:.2f}R"
+    sl_dist = abs(sig.sl - entry)
+    if sl_dist <= 0:
+        return "—"
+    return f"{abs(tp - entry) / sl_dist:.2f}R"
+
+
 def _htf_fmt(bias_str: str) -> str:
     _arrow = {"BULL": "↑", "BEAR": "↓", "NEUTRAL": "→"}
     parts: list[str] = []
@@ -223,9 +246,9 @@ def _format_live(sig: Signal, signal_id: str, signal_mode: str) -> str:
     L.append(f"🛑 <b>Stop Loss </b>   <code>{sl_str}</code>")
     L.append("")
     L.append("🎯 <b>Take Profit</b>")
-    L.append(f"   TP1 : <code>{tp1_str}</code>  (RR {sig.tp1_rr:.1f})")
-    L.append(f"   TP2 : <code>{tp2_str}</code>  (RR {sig.tp2_rr:.1f})")
-    L.append(f"   TP3 : <code>{tp3_str}</code>  (RR {sig.tp3_rr:.1f})")
+    L.append(f"   TP1 : <code>{tp1_str}</code>  (RR {_rr_label(sig, sig.tp)})")
+    L.append(f"   TP2 : <code>{tp2_str}</code>  (RR {_rr_label(sig, sig.tp2)})")
+    L.append(f"   TP3 : <code>{tp3_str}</code>  (RR {_rr_label(sig, sig.tp3)})")
     L.append(f"📊 <b>Risk/Reward</b>  <code>{rr_str}</code>")
     L.extend(_position_section(sig))
     L.extend(_technical_section(sig))
@@ -277,9 +300,9 @@ def _format_setup(sig: Signal, signal_id: str, signal_mode: str) -> str:
     L.append(f"🛑 <b>Stop Loss </b>   <code>{sl_str}</code>")
     L.append("")
     L.append("🎯 <b>Take Profit</b>")
-    L.append(f"   TP1 : <code>{tp1_str}</code>  (RR {sig.tp1_rr:.1f})")
-    L.append(f"   TP2 : <code>{tp2_str}</code>  (RR {sig.tp2_rr:.1f})")
-    L.append(f"   TP3 : <code>{tp3_str}</code>  (RR {sig.tp3_rr:.1f})")
+    L.append(f"   TP1 : <code>{tp1_str}</code>  (RR {_rr_label(sig, sig.tp)})")
+    L.append(f"   TP2 : <code>{tp2_str}</code>  (RR {_rr_label(sig, sig.tp2)})")
+    L.append(f"   TP3 : <code>{tp3_str}</code>  (RR {_rr_label(sig, sig.tp3)})")
     L.append(f"📊 <b>Risk/Reward</b>  <code>{rr_str}</code>")
     L.extend(_position_section(sig))
     L.extend(_technical_section(sig))

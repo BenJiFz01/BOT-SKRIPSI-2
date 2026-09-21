@@ -13,9 +13,16 @@ Prinsip:
   Entry zone = 0.3×ATR dari close candle → zona masuk yang realistis
   SL di-cap per TF (dari settings) supaya tidak terlalu lebar
 
-  TP proporsional terhadap SL:
-    Scalping: TP1=1.0R, TP2=1.6R, TP3=2.6R  (norma ATR-based 2026-09-18)
-    Intraday: TP1=1.5R, TP2=2.5R, TP3=4.0R
+  TP:
+    Scalping → TP1 = tp1_atr_mult × ATR (TIDAK proporsional ke SL; target
+               "kunci profit cepat" yang wajar untuk scalping, mis. 1.0×ATR).
+               TL2/TP3 TETAP proporsional ke SL sebagai runner:
+               TP2=1.6R, TP3=2.6R.  (TP1 lama 1.0R = SL_dist → bisa 180 pip,
+               terlalu jauh untuk scalping M15 — 2026-09-19)
+    Intraday → TP1=1.5R, TP2=2.5R, TP3=4.0R (proporsional ke SL)
+
+  Gate RR di engine kini mengukur rr_tp2 (runner) sebagai "RR struktural",
+  BUKAN rr TP1 — karena TP1 didesain sebagai kunci untung cepat (RR TP1 bisa < 1).
 """
 import math
 from dataclasses import dataclass, field
@@ -37,14 +44,16 @@ class _SlConfig:
 
 @dataclass(frozen=True)
 class _TpConfig:
-    tp1_rr:  float
-    tp2_rr:  float
-    tp3_rr:  float
+    tp1_rr:       float
+    tp2_rr:       float
+    tp3_rr:       float
+    tp1_atr_mult: float = 0.0   # >0 → TP1 = tp1_atr_mult × ATR (independen SL)
 
 
 _SL_SCALPING = _SlConfig(atr_mult=1.2, min_sl_pts=5.0,  max_sl_pts=20.0, lookback=20)
 _SL_INTRADAY = _SlConfig(atr_mult=1.5, min_sl_pts=10.0, max_sl_pts=60.0, lookback=40)
-_TP_SCALPING = _TpConfig(tp1_rr=1.0, tp2_rr=1.6, tp3_rr=2.6)
+# Scalping: TP1 = 1.0×ATR (kunci profit cepat) → TP2/TP3 tetap runner (1.6R/2.6R)
+_TP_SCALPING = _TpConfig(tp1_rr=1.0, tp2_rr=1.6, tp3_rr=2.6, tp1_atr_mult=1.0)
 _TP_INTRADAY = _TpConfig(tp1_rr=1.5, tp2_rr=2.5, tp3_rr=4.0)
 
 # Entry zone fraction — 0.3×ATR dari close
@@ -180,8 +189,13 @@ def _build_plan(
     r3:         float,
     df:         pd.DataFrame | None,
     is_scalping: bool,
+    tp1_atr_mult: float = 0.0,
 ) -> SLTPlan | None:
-    """Bangun SLTPlan dari titik SL yang sudah ditentukan."""
+    """Bangun SLTPlan dari titik SL yang sudah ditentukan.
+
+    tp1_atr_mult > 0 → TP1 = ref_entry ± tp1_atr_mult×ATR (independen SL).
+    tp1_atr_mult == 0 → TP1 = ref_entry ± sl_dist×r1 (legacy, proporsional SL).
+    """
     ez = _EZ_FRAC * a
 
     if d == "BUY":
@@ -210,11 +224,18 @@ def _build_plan(
     if not ok or sl_dist <= 0:
         return None
 
-    tp1 = round(ref_entry + sign * sl_dist * r1, 5)
+    if tp1_atr_mult > 0:
+        # TP1 berbasis ATR — target "kunci profit cepat" yang wajar untuk scalping,
+        # tidak proporsional terhadap SL. TP2/TP3 tetap runner (R×SL).
+        tp1 = round(ref_entry + sign * tp1_atr_mult * a, 5)
+    else:
+        tp1 = round(ref_entry + sign * sl_dist * r1, 5)
     tp2 = round(ref_entry + sign * sl_dist * r2, 5)
     tp3 = round(ref_entry + sign * sl_dist * r3, 5)
 
     if df is not None and len(df) >= 20:
+        # Obstacle adjust tetap berjalan di TP1 (min_rr=0.8): kalau ada S/R
+        # menghalangi, TP digeser — hanya jika RR masih terjaga >= 0.8.
         tp1 = round(_adjust_tp_for_obstacle(d, ref_entry, tp1, a, sl_dist, df, min_rr=0.8), 5)
         tp2 = round(_adjust_tp_for_obstacle(d, ref_entry, tp2, a, sl_dist, df, min_rr=1.5), 5)
 
@@ -252,6 +273,7 @@ def calc_sltp(
     df:          pd.DataFrame | None = None,
     max_sl_points:       float = 0.0,
     sl_atr_mult_override: float = 0.0,   # >0 → override sl_cfg.atr_mult (wire dari .env)
+    tp1_atr_mult_override: float = 0.0,  # >0 → TP1 = ATR-based (wire dari .env, scalping)
     **_kwargs,
 ) -> "SLTPlan | None":
     """Hitung SL/TP: coba structural SL dulu, fallback ke ATR flat.
@@ -287,6 +309,9 @@ def calc_sltp(
     r2 = tp2_rr if tp2_rr > 0 else tp_cfg.tp2_rr
     r3 = tp3_rr if tp3_rr > 0 else tp_cfg.tp3_rr
 
+    # TP1 ATR-based: override dari luar (scalping) menang; fallback ke config TF.
+    eff_tp1_atr = tp1_atr_mult_override if tp1_atr_mult_override > 0 else tp_cfg.tp1_atr_mult
+
     hard_cap = max_sl if max_sl > 0 else (max_sl_points if max_sl_points > 0 else sl_cfg.max_sl_pts)
     ez       = _EZ_FRAC * a
     buffer   = _STRUCT_BUFFER_FRAC * a
@@ -310,7 +335,8 @@ def calc_sltp(
                           buffer, sl_cfg.lookback, safe_cap) if df is not None else None
 
     if struct_sl is not None:
-        plan = _build_plan(d, p, a, struct_sl, "swing", r1, r2, r3, df, is_scalping)
+        plan = _build_plan(d, p, a, struct_sl, "swing", r1, r2, r3, df, is_scalping,
+                           tp1_atr_mult=eff_tp1_atr)
         # Validasi pakai safe_cap — sl_dist_actual (= ez + sl_dist) dijamin <= hard_cap
         # ── ATR-relative cap khusus scalping ──────────────────────────────
         # Swing SL yang valid secara struktural bisa tetap terlalu jauh relatif
@@ -337,7 +363,8 @@ def calc_sltp(
     else:
         atr_sl = p + ez + sl_dist   # = entry_high + sl_dist
 
-    plan = _build_plan(d, p, a, atr_sl, "atr_fallback", r1, r2, r3, df, is_scalping)
+    plan = _build_plan(d, p, a, atr_sl, "atr_fallback", r1, r2, r3, df, is_scalping,
+                       tp1_atr_mult=eff_tp1_atr)
     if plan is not None and sl_cfg.min_sl_pts <= plan.sl_dist <= safe_cap:
         return plan
 
@@ -359,6 +386,7 @@ def swing_based_sltp(
     entry_atr_frac:      float = 0.3,
     max_sl:              float = 0.0,
     sl_atr_mult_override: float = 0.0,
+    tp1_atr_mult_override: float = 0.0,
     **_kwargs,
 ) -> "SLTPlan | None":
     """SL berbasis pivot struktural (PRD §19: Structural Invalidation + Adaptive ATR Buffer).
@@ -375,6 +403,7 @@ def swing_based_sltp(
         direction=direction, price_now=price_now, atr=atr,
         is_scalping=is_scalping, tp1_rr=tp1_rr, tp2_rr=tp2_rr, tp3_rr=tp3_rr,
         max_sl=max_sl, df=df, sl_atr_mult_override=sl_atr_mult_override,
+        tp1_atr_mult_override=tp1_atr_mult_override,
     )
 
 
@@ -391,6 +420,7 @@ def dynamic_atr_sltp(
     data_by_tf:          dict[str, pd.DataFrame] | None = None,
     df:                  pd.DataFrame | None = None,
     sl_atr_mult_override: float = 0.0,
+    tp1_atr_mult_override: float = 0.0,
     **_kwargs,
 ) -> "SLTPlan | None":
     """ATR-based SL — langsung ke fallback path tanpa coba swing."""
@@ -398,6 +428,7 @@ def dynamic_atr_sltp(
         direction=direction, price_now=price_now, atr=atr,
         is_scalping=is_scalping, tp1_rr=tp1_rr, tp2_rr=tp2_rr, tp3_rr=tp3_rr,
         max_sl=max_sl, df=df, sl_atr_mult_override=sl_atr_mult_override,
+        tp1_atr_mult_override=tp1_atr_mult_override,
     )
 
 

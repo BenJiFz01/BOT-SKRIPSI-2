@@ -129,6 +129,7 @@ class Settings:
     scalping_tp1_rr:               float
     scalping_tp2_rr:               float
     scalping_tp3_rr:               float
+    scalping_tp1_atr_mult:         float  # TP1 scalping = kelipatan ATR (independen SL)
     scalping_min_rr:               float
     # Min RR terpisah untuk scalping counter-trend (berlawanan HTF)
     # Mencegah: scalping CT pakai counter_trend_min_rr intraday (1.1)
@@ -209,11 +210,12 @@ def load_settings() -> Settings:
         scalping_cooldown_bars        = _geti("SCALPING_COOLDOWN_BARS",        5),
         scalping_cooldown_bars_m5     = _geti("SCALPING_COOLDOWN_BARS_M5",     9),
         scalping_cooldown_bars_m15    = _geti("SCALPING_COOLDOWN_BARS_M15",    5),
-        scalping_tp1_rr               = _getf("SCALPING_TP1_RR",               1.0),
-        scalping_tp2_rr               = _getf("SCALPING_TP2_RR",               1.6),
-        scalping_tp3_rr               = _getf("SCALPING_TP3_RR",               2.6),
-        scalping_min_rr               = _getf("SCALPING_MIN_RR",               1.0),
-        # >= SCALPING_TP1_RR supaya gate RR selalu lolos (rr = TP1_RR)
-        # .env bisa override ke nilai lebih ketat (misal 1.5) untuk scalping CT
+scalping_tp1_rr               = _getf("SCALPING_TP1_RR",               1.0),
+scalping_tp2_rr               = _getf("SCALPING_TP2_RR",               1.6),
+scalping_tp3_rr               = _getf("SCALPING_TP3_RR",               2.6),
+scalping_tp1_atr_mult         = _getf("SCALPING_TP1_ATR_MULT",         1.0),
+scalping_min_rr               = _getf("SCALPING_MIN_RR",               1.0),
+        # Gate RR scalar: acuan kini rr_tp2 (runner) — TP1 ATR-based bukan target
+        # RR utama. SCALPING_MIN_RR wajib <= SCALPING_TP2_RR agar runner lolos.
         scalping_counter_trend_min_rr = _getf("SCALPING_COUNTER_TREND_MIN_RR", 1.5),
     )

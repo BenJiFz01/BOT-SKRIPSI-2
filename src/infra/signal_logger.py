@@ -18,7 +18,7 @@ JSON_PATH = LOG_DIR / "signal_history.json"
 CSV_FIELDS = [
     "signal_id", "timestamp", "symbol", "timeframe", "direction",
     "signal_mode", "trade_mode", "is_setup_plan", "exec_tf", "candle_close",
-    "entry", "sl", "tp1", "tp2", "tp3", "rr",
+    "entry", "sl", "tp1", "tp2", "tp3", "rr", "rr_tp2_actual",
     "trigger_score", "confluence_score", "htf_bias",
     "trigger_notes", "confluence_notes", "pattern_names",
     "fib_detail", "snr_detail", "snd_detail", "divergence_detail",
@@ -71,6 +71,7 @@ class SignalRecord:
     tp2:               float
     tp3:               float
     rr:                float
+    rr_tp2_actual:     float
     trigger_score:     str
     confluence_score:  str
     htf_bias:          str
@@ -177,6 +178,7 @@ class SignalLogger:
             tp2               = round(sig.tp2, 5) if sig.tp2 is not None else 0.0,
             tp3               = round(sig.tp3, 5) if sig.tp3 is not None else 0.0,
             rr                = round(sig.rr,  2) if sig.rr  is not None else 0.0,
+            rr_tp2_actual     = round(sig.rr_tp2_actual, 2),
             trigger_score     = f"{sig.trigger_score}/{sig.trigger_max}",
             confluence_score  = f"{sig.confluence_score}",
             htf_bias          = sig.htf_bias,
@@ -272,6 +274,7 @@ class SignalLogger:
         wins = {"WIN_TP1": 0, "WIN_TP2": 0, "WIN_TP3": 0}
         losses = pending = cancelled = 0
         rr_list: list[float] = []
+        rr_tp2_list: list[float] = []
         dur_list: list[int]  = []
         by_tf: dict = {}
         by_dir: dict = {}
@@ -300,6 +303,8 @@ class SignalLogger:
             elif outcome in wins:
                 wins[outcome] += 1
                 if rr  > 0: rr_list.append(rr)
+                rr_tp2 = float(rec.get("rr_tp2_actual", 0) or 0)
+                if rr_tp2 > 0: rr_tp2_list.append(rr_tp2)
                 if dur > 0: dur_list.append(dur)
                 for bmap, key in [(by_tf, tf), (by_dir, direc), (by_mode, mode)]:
                     bmap[key]["win"] += 1
@@ -355,6 +360,7 @@ class SignalLogger:
             "cancelled":      cancelled,
             "win_rate_pct":   round(total_wins / decided * 100, 1) if decided else 0.0,
             "avg_rr":         round(sum(rr_list)  / len(rr_list),  2) if rr_list  else 0.0,
+            "avg_structural_rr": round(sum(rr_tp2_list) / len(rr_tp2_list), 2) if rr_tp2_list else 0.0,
             "avg_duration_m": int(sum(dur_list) / len(dur_list))       if dur_list else 0,
             "by_timeframe":   by_tf,
             "by_direction":   by_dir,

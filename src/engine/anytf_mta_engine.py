@@ -568,11 +568,11 @@ def _confluence_score(
     Threshold yang ada (min_confluence_score) sudah dikalibrasi untuk skala ini.
     """
     # ── Bobot komponen (OPTIMIZED) ────────────────────────────────────────────
-    _W_PATTERN   = 1.5   # Pattern: 48.8%, proven
-    _W_FIB       = 1.5   # Fibonacci: 48.7%, proven
-    _W_DIV       = 1.5   # Divergence: BOOSTED (early signal, high value)
-    _W_SNR       = 1.0   # SNR: weighted internally (0.3x/0.6x/1.0x)
-    _W_SND       = 2.0   # SND: BOOSTED (institutional zones, high impact)
+    _W_PATTERN   = 1.5   
+    _W_FIB       = 1.5   
+    _W_DIV       = 1.5   
+    _W_SNR       = 1.0  
+    _W_SND       = 2.0   
     direction = direction.upper()
     score: float = 0.0   # float untuk akumulasi bobot, dibulatkan ke int di akhir
     notes: list[str] = []
@@ -1037,6 +1037,7 @@ def evaluate_any_tf_mta(
     scalping_tp1_rr:               float            = 1.0,
     scalping_tp2_rr:               float            = 1.6,
     scalping_tp3_rr:               float            = 2.6,
+    scalping_tp1_atr_mult:         float            = 1.0,  # TP1 scalping = ×ATR (independen SL)
     scalping_min_rr:               float            = 1.0,
     scalping_counter_trend_min_rr: float            = 1.5,
     market_transition_adx_block:   float            = 15.0,
@@ -1278,12 +1279,14 @@ def evaluate_any_tf_mta(
             direction=direction, price_now=price_now, df=df_t, atr=atr,
             is_scalping=True, tp1_rr=eff_tp1_rr, tp2_rr=eff_tp2_rr, tp3_rr=eff_tp3_rr,
             max_sl=max_sl_points, sl_atr_mult_override=scalping_sl_atr_mult,
+            tp1_atr_mult_override=scalping_tp1_atr_mult,
         )
         if plan is None:
             plan = dynamic_atr_sltp(
                 direction=direction, price_now=price_now, atr=atr,
                 is_scalping=True, tp1_rr=eff_tp1_rr, tp2_rr=eff_tp2_rr, tp3_rr=eff_tp3_rr,
                 max_sl=max_sl_points, df=df_t, sl_atr_mult_override=scalping_sl_atr_mult,
+                tp1_atr_mult_override=scalping_tp1_atr_mult,
             )
         sl_method = "swing" if (plan is not None and "Swing" in (plan.method or "")) else "dynamic_atr"
     else:
@@ -1318,20 +1321,24 @@ def evaluate_any_tf_mta(
         return None
 
     entry_for_rr = plan.entry_high if direction == "BUY" else plan.entry_low
-    rr           = calc_rr(direction, entry_for_rr, plan.sl, plan.tp1)
+    # rr      = RR realisasi di TP1 (untuk laporan; bisa < 1 utk scalping karena TP1 ATR-based)
+    # rr_tp2  = RR struktural (runner) = acuan GATE RR. TP1 didesain sebagai "kunci
+    #           profit cepat", bukan target RR utama → potensi reward diukur dari TP2.
+    rr            = calc_rr(direction, entry_for_rr, plan.sl, plan.tp1)
+    rr_tp2_actual = calc_rr(direction, entry_for_rr, plan.sl, plan.tp2)
     # Pisahkan min_rr untuk scalping vs intraday, dan untuk CT vs trend-following:
     #   Scalping trend-following  : scalping_min_rr  (default 1.0)
     #   Scalping counter-trend    : scalping_counter_trend_min_rr  (default 1.5)
     #   Intraday trend-following  : min_rr  (default 1.0)
     #   Intraday counter-trend    : counter_trend_min_rr  (default 1.1)
     # Ini memastikan scalping CT tidak ikut counter_trend_min_rr intraday
-    # (yang lebih tinggi dari scalping_tp1_rr → sinyal mustahil lolos)
     if is_scalping:
         min_rr_eff = scalping_counter_trend_min_rr if _is_counter else scalping_min_rr
     else:
         min_rr_eff = counter_trend_min_rr if _is_counter else min_rr
-    if rr is None or rr < min_rr_eff:
-        _reject(df_t, f"RR_FAIL(rr={rr}/min={min_rr_eff})"); return None
+    gate_rr = rr_tp2_actual if (rr_tp2_actual is not None and rr_tp2_actual > 0) else rr
+    if gate_rr is None or gate_rr < min_rr_eff:
+        _reject(df_t, f"RR_FAIL(rr_tp2={gate_rr}/min={min_rr_eff})"); return None
 
     # Normalisasi ke tz-naive sebelum simpan agar konsisten saat load ulang
     ts_to_save = close_time_ts.tz_localize(None) if close_time_ts.tzinfo is not None else close_time_ts
@@ -1349,7 +1356,8 @@ def evaluate_any_tf_mta(
         entry=float(entry_for_rr), entry_low=float(plan.entry_low),
         entry_high=float(plan.entry_high), sl=float(plan.sl),
         tp=float(plan.tp1), tp2=float(plan.tp2), tp3=float(plan.tp3),
-        rr=float(rr), sl_method=sl_method, atr_value=float(atr),
+        rr=float(rr), rr_tp2_actual=float(rr_tp2_actual or 0.0),
+        sl_method=sl_method, atr_value=float(atr),
         tp1_rr=float(eff_tp1_rr), tp2_rr=float(eff_tp2_rr), tp3_rr=float(eff_tp3_rr),
         trigger_score=trig_score, trigger_max=6, confluence_score=conf_score,
         htf_bias=bias_detail,

@@ -30,6 +30,9 @@ class Signal(BaseModel):
     tp2:  float | None = None
     tp3:  float | None = None
     rr:   float | None = None
+    # RR struktural (runner) yang dijadikan acuan gate RR — karena TP1 scalping
+    # kini ATR-based (kunci profit cepat), potensi reward diukur dari TP2.
+    rr_tp2_actual: float = 0.0
 
     sl_method: str   = "fixed"
     tp1_rr:    float = 1.0

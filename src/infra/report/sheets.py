@@ -82,6 +82,7 @@ def sheet_ringkasan(wb, stats: dict, records: list[dict]) -> None:
     wr_cell = ws.cell(row=r_wr, column=3)
     wr_cell.fill = PatternFill("solid", fgColor=(C_WIN if stats["win_rate_pct"] >= 50 else C_LOSS))
     data_row("Average RR Realized",        stats["avg_rr"])
+    data_row("Average Structural RR (TP2)", stats.get("avg_structural_rr", 0.0))
     data_row("Avg Durasi Sinyal (menit)",  stats["avg_duration_m"])
     blank()
 

@@ -202,7 +202,7 @@ def main() -> None:
         f"cooldown={s.cooldown_bars}bar session={s.session_filter}"
     )
     logger.info(
-        f"PARAMS SCALPING | RR>={s.scalping_min_rr} TP1={s.scalping_tp1_rr}R "
+        f"PARAMS SCALPING | RR_struct>={s.scalping_min_rr} TP1={s.scalping_tp1_atr_mult}×ATR "
         f"CT_RR>={s.scalping_counter_trend_min_rr} "
         f"trig>={s.scalping_min_trigger_score} conf>={s.scalping_min_confluence_score} "
         f"cooldown M5={s.scalping_cooldown_bars_m5}bar M15={s.scalping_cooldown_bars_m15}bar"
@@ -242,7 +242,7 @@ def main() -> None:
                 f"<b>Intraday</b>: RR>={s.min_rr} | Trig>={s.min_trigger_score} "
                 f"| Conf>={s.min_confluence_score} "
                 f"| Cooldown={s.cooldown_bars}bar\n"
-                f"<b>Scalping</b>: RR>={s.scalping_min_rr} | TP1={s.scalping_tp1_rr}R "
+                f"<b>Scalping</b>: RR_struct>={s.scalping_min_rr} | TP1={s.scalping_tp1_atr_mult}×ATR "
                 f"| CT_RR>={s.scalping_counter_trend_min_rr} "
                 f"| Trig>={s.scalping_min_trigger_score} | Conf>={s.scalping_min_confluence_score}\n"
                 f"Session  : {'ON' if s.session_filter else 'OFF'}\n"
@@ -327,6 +327,7 @@ def main() -> None:
                             scalping_tp1_rr              = s.scalping_tp1_rr,
                             scalping_tp2_rr              = s.scalping_tp2_rr,
                             scalping_tp3_rr              = s.scalping_tp3_rr,
+                            scalping_tp1_atr_mult        = s.scalping_tp1_atr_mult,
                             scalping_min_rr              = s.scalping_min_rr,
                             scalping_counter_trend_min_rr= s.scalping_counter_trend_min_rr,
                             market_transition_adx_block  = s.market_transition_adx_block,
