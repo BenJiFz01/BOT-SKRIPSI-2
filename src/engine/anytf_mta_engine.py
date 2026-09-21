@@ -1321,9 +1321,8 @@ def evaluate_any_tf_mta(
         return None
 
     entry_for_rr = plan.entry_high if direction == "BUY" else plan.entry_low
-    # rr      = RR realisasi di TP1 (untuk laporan; bisa < 1 utk scalping karena TP1 ATR-based)
-    # rr_tp2  = RR struktural (runner) = acuan GATE RR. TP1 didesain sebagai "kunci
-    #           profit cepat", bukan target RR utama → potensi reward diukur dari TP2.
+    # rr = RR realisasi di TP1 (bisa <1 karena TP1 ATR-based); rr_tp2 = RR
+    # struktural (runner) = acuan gate.
     rr            = calc_rr(direction, entry_for_rr, plan.sl, plan.tp1)
     rr_tp2_actual = calc_rr(direction, entry_for_rr, plan.sl, plan.tp2)
     # Pisahkan min_rr untuk scalping vs intraday, dan untuk CT vs trend-following:

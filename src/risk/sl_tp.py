@@ -8,21 +8,20 @@ Prinsip:
     - Melewati zona stop-hunt di sekitar swing level yang terlihat jelas
     - Retail stop-loss sering ngumpul persis di bawah/atas swing → mudah diburu
     - 0.5×ATR ≈ separuh pergerakan rata-rata 1 candle → cukup untuk skip noise
-    - Konsekuensi: SL sedikit lebih lebar, tapi RR tetap proporsional (TP dari sl_dist)
+    - Konsekuensi: SL sedikit lebih lebar; RR runner tetap proporsional (TP2/TP3 dari sl_dist)
 
   Entry zone = 0.3×ATR dari close candle → zona masuk yang realistis
   SL di-cap per TF (dari settings) supaya tidak terlalu lebar
 
   TP:
-    Scalping → TP1 = tp1_atr_mult × ATR (TIDAK proporsional ke SL; target
-               "kunci profit cepat" yang wajar untuk scalping, mis. 1.0×ATR).
-               TL2/TP3 TETAP proporsional ke SL sebagai runner:
-               TP2=1.6R, TP3=2.6R.  (TP1 lama 1.0R = SL_dist → bisa 180 pip,
-               terlalu jauh untuk scalping M15 — 2026-09-19)
+    Scalping → TP1 = tp1_atr_mult × ATR — kunci profit cepat, independen dari
+               lebar SL (default 1.0×ATR). Dulu TP1=1.0R dari SL → ikut melebar
+               saat SL lebar (bisa ~180 pip), terlalu jauh untuk M15.
+               TP2=1.6R / TP3=2.6R tetap proporsional ke SL (runner).
     Intraday → TP1=1.5R, TP2=2.5R, TP3=4.0R (proporsional ke SL)
 
-  Gate RR di engine kini mengukur rr_tp2 (runner) sebagai "RR struktural",
-  BUKAN rr TP1 — karena TP1 didesain sebagai kunci untung cepat (RR TP1 bisa < 1).
+  Gate RR engine mengukur rr_tp2 (runner) sebagai RR struktural, bukan rr TP1 —
+  karena TP1 dirancang sebagai kunci profit cepat, RR-nya bisa < 1.
 """
 import math
 from dataclasses import dataclass, field
@@ -52,7 +51,6 @@ class _TpConfig:
 
 _SL_SCALPING = _SlConfig(atr_mult=1.2, min_sl_pts=5.0,  max_sl_pts=20.0, lookback=20)
 _SL_INTRADAY = _SlConfig(atr_mult=1.5, min_sl_pts=10.0, max_sl_pts=60.0, lookback=40)
-# Scalping: TP1 = 1.0×ATR (kunci profit cepat) → TP2/TP3 tetap runner (1.6R/2.6R)
 _TP_SCALPING = _TpConfig(tp1_rr=1.0, tp2_rr=1.6, tp3_rr=2.6, tp1_atr_mult=1.0)
 _TP_INTRADAY = _TpConfig(tp1_rr=1.5, tp2_rr=2.5, tp3_rr=4.0)
 
@@ -225,8 +223,7 @@ def _build_plan(
         return None
 
     if tp1_atr_mult > 0:
-        # TP1 berbasis ATR — target "kunci profit cepat" yang wajar untuk scalping,
-        # tidak proporsional terhadap SL. TP2/TP3 tetap runner (R×SL).
+        # TP1 ATR-based — kunci profit cepat, tidak ikut lebar saat SL lebar.
         tp1 = round(ref_entry + sign * tp1_atr_mult * a, 5)
     else:
         tp1 = round(ref_entry + sign * sl_dist * r1, 5)
@@ -234,8 +231,7 @@ def _build_plan(
     tp3 = round(ref_entry + sign * sl_dist * r3, 5)
 
     if df is not None and len(df) >= 20:
-        # Obstacle adjust tetap berjalan di TP1 (min_rr=0.8): kalau ada S/R
-        # menghalangi, TP digeser — hanya jika RR masih terjaga >= 0.8.
+        # TP1 tetap digeser lewat obstacle adjust selama RR terjaga >= 0.8.
         tp1 = round(_adjust_tp_for_obstacle(d, ref_entry, tp1, a, sl_dist, df, min_rr=0.8), 5)
         tp2 = round(_adjust_tp_for_obstacle(d, ref_entry, tp2, a, sl_dist, df, min_rr=1.5), 5)
 
@@ -309,7 +305,7 @@ def calc_sltp(
     r2 = tp2_rr if tp2_rr > 0 else tp_cfg.tp2_rr
     r3 = tp3_rr if tp3_rr > 0 else tp_cfg.tp3_rr
 
-    # TP1 ATR-based: override dari luar (scalping) menang; fallback ke config TF.
+    # Override dari .env menang; fallback ke config TF.
     eff_tp1_atr = tp1_atr_mult_override if tp1_atr_mult_override > 0 else tp_cfg.tp1_atr_mult
 
     hard_cap = max_sl if max_sl > 0 else (max_sl_points if max_sl_points > 0 else sl_cfg.max_sl_pts)

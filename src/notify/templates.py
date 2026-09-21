@@ -13,13 +13,7 @@ _MODE_TAG: dict[str, str] = {
 
 
 def _rr_label(sig: Signal, tp: float | None) -> str:
-    """Label RR per TP sesuai jarak harga sesungguhnya (entry_ref → TP).
-
-    TP1 dipakai sig.rr (realisasi TP1 dari gate engine). TP2 dipakai
-    sig.rr_tp2_actual (RR struktural/runner — acuan gate). TP3 dihitung
-    dari harga karena tidak disimpan terpisah. Fallback ke perhitungan
-    langsung dari harga agar konsisten.
-    """
+    """RR aktual per TP: TP1=sig.rr, TP2=sig.rr_tp2_actual, selainnya dihitung dari harga."""
     if tp is None or tp <= 0 or sig.sl is None or sig.sl <= 0:
         return "—"
     entry = (sig.entry_high or sig.entry) if sig.direction == "BUY" else (sig.entry_low or sig.entry)

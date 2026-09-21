@@ -215,7 +215,7 @@ scalping_tp2_rr               = _getf("SCALPING_TP2_RR",               1.6),
 scalping_tp3_rr               = _getf("SCALPING_TP3_RR",               2.6),
 scalping_tp1_atr_mult         = _getf("SCALPING_TP1_ATR_MULT",         1.0),
 scalping_min_rr               = _getf("SCALPING_MIN_RR",               1.0),
-        # Gate RR scalar: acuan kini rr_tp2 (runner) — TP1 ATR-based bukan target
-        # RR utama. SCALPING_MIN_RR wajib <= SCALPING_TP2_RR agar runner lolos.
+        # Gate RR acuan rr_tp2 (runner). SCALPING_MIN_RR wajib <= SCALPING_TP2_RR
+        # supaya runner lolos.
         scalping_counter_trend_min_rr = _getf("SCALPING_COUNTER_TREND_MIN_RR", 1.5),
     )
