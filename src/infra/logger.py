@@ -26,9 +26,7 @@ _FMT_FILE = (
 def setup_logger(console_level: str = "INFO") -> None:
     """
     Inisialisasi loguru.
-    - Console : level INFO ke atas (WARNING, ERROR, SUCCESS tampil berwarna)
-    - File     : level DEBUG ke atas, rotasi harian, retensi 7 hari
-    Detail reject reason (level DEBUG) hanya masuk ke file, tidak bising di terminal.
+    Console INFO; file DEBUG + rotasi harian. Detail reject (DEBUG) hanya di file agar tidak bising di terminal.
     """
     LOG_FILE.parent.mkdir(parents=True, exist_ok=True)
     logger.remove()

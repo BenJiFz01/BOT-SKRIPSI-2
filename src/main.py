@@ -1,12 +1,7 @@
 """main.py — Entry point bot trading DSS Forex.
 
 Jalankan: python -m src.main
-
-Alur:
-  1. Fetch OHLCV + indikator untuk semua TF
-  2. Pada setiap candle close → evaluate_any_tf_mta()
-  3. Kirim sinyal ke Telegram
-  4. Tracker memantau outcome sinyal yang terkirim
+Loop: candle close → evaluate_any_tf_mta() → sinyal ke Telegram → tracker pantau outcome.
 """
 import re
 import time
@@ -33,7 +28,7 @@ from src.notify.telegram import send_message
 from src.notify.templates import format_signal
 
 
-# ── Reject label utilities ────────────────────────────────────────────────────
+# Reject label utilities
 
 
 def _extract(s: str, open_: str, close_: str) -> str:
@@ -95,7 +90,14 @@ def _short_reject(raw: str) -> str:
         if sc:
             skor      = sc.group(1)
             threshold = sc.group(2)
-            return f"Confluence rendah: {skor} (min={threshold})"
+            notes = re.search(r"\[(.*?)\]", raw)
+            extra = ""
+            if notes:
+                tags = [n.strip() for n in notes.group(1).split(",")
+                        if any(k in n for k in ("Sweep", "FVG"))]
+                if tags:
+                    extra = " [" + ",".join(tags) + "]"
+            return f"Confluence rendah: {skor} (min={threshold}){extra}"
         return "Confluence gagal"
     if u.startswith("SNR_BLOCKED"):
         return "SNR blocked: jalan terblokir"
@@ -136,8 +138,7 @@ def _short_reject_with_df(raw: str, df: pd.DataFrame | None = None) -> str:
         return raw
     u = raw.upper()
     if u.startswith("CT_EMA200_FAIL") or u.startswith("EMA200_WAJIB"):
-        # CT_EMA200_FAIL tidak menyertakan dir= di raw, tapi bisa dibaca dari df
-        # Jika tidak ada, tampilkan "CT" sebagai label (bukan "?")
+        # CT_EMA200_FAIL tidak memuat dir= di raw — baca dari df, fallback "CT"
         dir_match = re.search(r"dir=(\w+)", raw)
         if df is not None and len(df) >= 2:
             try:
@@ -162,8 +163,6 @@ def _short_reject_with_df(raw: str, df: pd.DataFrame | None = None) -> str:
     return _short_reject(raw)
 
 
-# ── Utilities ─────────────────────────────────────────────────────────────────
-
 def _fetch_prepare(symbol: str, tf: str, bars: int) -> pd.DataFrame:
     df = fetch_ohlc(symbol, tf, bars).sort_values("time").reset_index(drop=True)
     df = add_indicators(df, tf=tf)
@@ -185,8 +184,6 @@ def _refresh_report(sig_logger: SignalLogger) -> None:
         logger.debug(f"Report refresh gagal: {e}")
 
 
-# ── Main loop ─────────────────────────────────────────────────────────────────
-
 def main() -> None:
     setup_logger()
     logger.info("Logger aktif")
@@ -202,8 +199,10 @@ def main() -> None:
         f"cooldown={s.cooldown_bars}bar session={s.session_filter}"
     )
     logger.info(
-        f"PARAMS SCALPING | RR_struct>={s.scalping_min_rr} TP1={s.scalping_tp1_atr_mult}×ATR "
-        f"CT_RR>={s.scalping_counter_trend_min_rr} "
+        f"PARAMS SCALPING | TP={s.scalping_tp1_rr}R/{s.scalping_tp2_rr}R/{s.scalping_tp3_rr}R "
+        f"SL<=10pt ATR>=5 OE>={s.scalping_overextend_atr_mult}×ATR "
+        f"PB={'ON' if s.scalping_pullback_enabled else 'OFF'} "
+        f"Sweep={'ON' if s.scalping_sweep_enabled else 'OFF'} FVG={'ON' if s.scalping_fvg_enabled else 'OFF'} "
         f"trig>={s.scalping_min_trigger_score} conf>={s.scalping_min_confluence_score} "
         f"cooldown M5={s.scalping_cooldown_bars_m5}bar M15={s.scalping_cooldown_bars_m15}bar"
     )
@@ -241,9 +240,11 @@ def main() -> None:
                 f"TFs      : {', '.join(s.timeframes)}\n\n"
                 f"<b>Intraday</b>: RR>={s.min_rr} | Trig>={s.min_trigger_score} "
                 f"| Conf>={s.min_confluence_score} "
+                f"| D1_anchor={'ON' if s.intraday_require_d1 else 'OFF'} "
                 f"| Cooldown={s.cooldown_bars}bar\n"
-                f"<b>Scalping</b>: RR_struct>={s.scalping_min_rr} | TP1={s.scalping_tp1_atr_mult}×ATR "
-                f"| CT_RR>={s.scalping_counter_trend_min_rr} "
+                f"<b>Scalping</b>: TP={s.scalping_tp1_rr}R/{s.scalping_tp2_rr}R/{s.scalping_tp3_rr}R "
+                f"| SL<=10pt | OE>={s.scalping_overextend_atr_mult}×ATR "
+                f"| PB={'ON' if s.scalping_pullback_enabled else 'OFF'} "
                 f"| Trig>={s.scalping_min_trigger_score} | Conf>={s.scalping_min_confluence_score}\n"
                 f"Session  : {'ON' if s.session_filter else 'OFF'}\n"
                 f"Tracker  : ON ({tracker.get_active_count()} sinyal pending)"
@@ -328,6 +329,12 @@ def main() -> None:
                             scalping_tp2_rr              = s.scalping_tp2_rr,
                             scalping_tp3_rr              = s.scalping_tp3_rr,
                             scalping_tp1_atr_mult        = s.scalping_tp1_atr_mult,
+                            scalping_overextend_atr_mult  = s.scalping_overextend_atr_mult,
+                            scalping_pullback_enabled  = s.scalping_pullback_enabled,
+                            scalping_sweep_enabled   = s.scalping_sweep_enabled,
+                            scalping_fvg_enabled     = s.scalping_fvg_enabled,
+                            momentum_ema200_tolerance= s.momentum_ema200_tolerance,
+                            range_rejection_enabled  = s.range_rejection_enabled,
                             scalping_min_rr              = s.scalping_min_rr,
                             scalping_counter_trend_min_rr= s.scalping_counter_trend_min_rr,
                             market_transition_adx_block  = s.market_transition_adx_block,
@@ -336,8 +343,7 @@ def main() -> None:
                             intraday_require_d1          = s.intraday_require_d1,
                         )
                     except Exception as eval_err:
-                        # Exception di satu TF/candle tidak boleh mematikan seluruh bot.
-                        # Log sebagai error, skip candle ini, lanjut ke TF berikutnya.
+# Exception satu TF/candle jangan mematikan seluruh bot — log, skip, lanjut.
                         logger.error(f"[EVAL ERROR] {symbol} {tf_u_norm}: {eval_err}", exc_info=True)
                         continue
 

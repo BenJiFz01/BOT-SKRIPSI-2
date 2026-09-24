@@ -24,17 +24,13 @@ _TF_CONFIG: dict[str, _SndConfig] = {
 }
 _TF_CONFIG_DEFAULT = _SndConfig(lookback=200, impulse_body_atr=1.2, base_max_range=0.9, min_impulse_dist=1.2)
 
-# Confluence set berbeda per mode (sama pola seperti SNR):
-#   Scalping (M5/M15): H4+H1
-#   Intraday (H1):     D1+H4  — D1 penting untuk validasi zona major intraday
+# Confluence set per mode (sama pola seperti SNR):
+#   Scalping: H4+H1; Intraday: D1+H4 (D1 untuk validasi zona major intraday)
 _CONFLUENCE_TFS_SCALPING = ("H4", "H1")
 _CONFLUENCE_TFS_INTRADAY = ("D1", "H4")
 
 _BASE_WINDOW    = 6
-_NEAR_ENTRY_ATR = 1.2   # Dinaikkan dari 1.0 → 1.2: radius "dekat zona valid" lebih longgar
-                         # tanpa mengubah definisi zona itu sendiri (touch count, strength tetap ketat)
-                         # Efek: lebih banyak sinyal lolos confluence SND, terutama saat harga
-                         # baru saja keluar dari zona (masih dalam jangkauan wajar)
+_NEAR_ENTRY_ATR = 1.2   # Radius "dekat zona valid"; dinaikkan 1.0→1.2 agar lebih banyak sinyal lolos confluence
 
 
 def _get_atr(df: pd.DataFrame) -> float:
@@ -56,17 +52,8 @@ def _count_zone_touches(
 ) -> tuple[int, bool]:
     """Hitung touch zona secara vectorized (numpy).
 
-    Returns (touch_count, zone_held).
-      touch_count: 0=fresh, 1=satu retest, 2+=exhausted
-      zone_held  : True jika tidak ada close yang menembus sisi seberang
-
-    Logika:
-      - Candle overlap zona = touch
-        Demand (bullish): low <= zone_high AND high >= zone_low
-        Supply (bearish): high >= zone_low AND low <= zone_high
-      - Close menembus sisi seberang = zona rusak (held=False), stop di situ
-        Demand: close < zone_low
-        Supply: close > zone_high
+    Returns (touch_count: 0=fresh, 1=retest, 2+=exhausted; zone_held: False jika ada
+    close yang menembus sisi seberang). Candle break terakhir ikut dihitung touch.
     """
     if len(after) == 0:
         return 0, True
@@ -75,7 +62,6 @@ def _count_zone_touches(
     highs  = after["high"].to_numpy(dtype=float)
     closes = after["close"].to_numpy(dtype=float)
 
-    # Cari indeks candle pertama yang menembus zona
     if bullish:
         broken = closes < zone_low
     else:
@@ -137,7 +123,6 @@ def _find_zones(
         if impulse_dist < cfg.min_impulse_dist * atr:
             continue
 
-        # Freshness check — tiered
         after = data.iloc[i + 1:]
         if len(after) > 0:
             touch_count, zone_held = _count_zone_touches(after, base_low, base_high, bullish)
@@ -150,9 +135,7 @@ def _find_zones(
         else:
             touch_count = 0
 
-        # Freshness — berdasarkan umur formasi (n - i = bar sejak impulse candle)
-        # Independen dari touch_count: zona baru yang belum disentuh BERBEDA dengan
-        # zona lama yang kebetulan juga belum disentuh.
+        # Freshness dari umur formasi — independen dari touch_count (zona baru ≠ zona lama)
         age_bars  = n - i
         freshness = "FRESH" if age_bars <= cfg.lookback / 3 else "AGED"
 
@@ -195,10 +178,9 @@ def _best_zone_near_entry(
     near_thr:    float,
     atr:         float,
 ) -> dict | None:
-    """Pilih zona terbaik dekat entry dengan prioritas:
-      1. FRESH (umur <= 1/3 lookback) — ketat: near_thr
-      2. AGED_FALLBACK — lebih longgar: near_thr + 0.3×ATR
-      Dalam setiap kategori: utamakan (touch_count==1, strength) lebih tinggi.
+    """Pilih zona terbaik dekat entry: FRESH (ketat near_thr) dulu, lalu AGED
+    fallback (longgar near_thr+0.3×ATR). Dalam kategori: utamakan (touch_count==1,
+    strength) lebih tinggi.
     """
     near_thr_aged = near_thr + 0.3 * atr
 
@@ -243,9 +225,7 @@ def snd_confluence_score(
     """
     Skor konfluensi Supply & Demand: 0 atau 1.
 
-    is_scalping menentukan confluence set:
-      True  → H4+H1
-      False → D1+H4 (D1 penting untuk validasi zona major intraday)
+    Confluence set: True → H4+H1; False → D1+H4 (D1 untuk zona major intraday).
     """
     if atr <= 0:
         return 0, "SND_SKIP"

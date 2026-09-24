@@ -2,7 +2,6 @@
 
 from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 
-# Warna tema
 C_HEADER_BLUE = "1F4E79"
 C_HEADER_GOLD = "C9A000"
 C_WIN         = "E2EFDA"

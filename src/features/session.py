@@ -1,19 +1,8 @@
 """session.py — Filter sesi trading XAU/USD (WIB/UTC+7).
 
-Filosofi filter sesi yang dipakai:
-  - Asian (06:00-14:00 WIB) : TIDAK diblokir total — XAU/USD tetap bergerak
-    di Asian terutama saat ada news Asia atau momentum dari overnight NY.
-    Yang berbeda: scalping di Asian memerlukan konfirmasi level kunci (SNR/Fib)
-    karena volatilitas lebih rendah dan fake breakout lebih sering.
-    Flag "asian_mode" = True dikirim ke evaluator agar threshold lebih ketat.
-
-  - London (14:00-23:00 WIB) : Aktif penuh, kondisi terbaik untuk XAU/USD.
-
-  - New York (19:00-02:00 WIB) : Aktif penuh, overlap L+NY (19:00-23:00)
-    adalah periode paling likuid dan volatile.
-
-  - Off session (02:00-06:00 WIB): Diblokir untuk M5/M15 scalping —
-    periode ini volume sangat rendah, spread lebar, dan noise dominan.
+Asian (06:00-14:00) tidak diblokir tapi butuh konfirmasi level kunci (SNR/Fib).
+London dan NY aktif penuh (titik terbaik overlap 19:00-23:00). Off (02:00-06:00)
+diblokir untuk scalping M5/M15 — volume rendah, spread lebar, noise dominan.
 """
 
 from datetime import datetime, time
@@ -26,9 +15,9 @@ from src.utils.time_utils import to_wib
 _TZ_UTC = pytz.utc
 
 # Timeframe yang tidak difilter sesi sama sekali
-_UNFILTERED_TFS = {"H4", "D1"}
+_UNFILTERED_TFS = {"D1"}
 
-# ── Jam sesi (WIB / UTC+7) ────────────────────────────────────────────────────
+# Jam sesi (WIB / UTC+7)
 _ASIAN_START  = time(6,  0)
 _ASIAN_END    = time(14, 0)
 _LONDON_START = time(14, 0)
@@ -36,7 +25,6 @@ _LONDON_END   = time(23, 0)
 _NY_START     = time(19, 0)
 _NY_END       = time(2,  0)    # melewati tengah malam
 
-# Off session: 02:00-06:00 WIB — diblokir untuk scalping M5/M15
 _OFF_START = time(2,  0)
 _OFF_END   = time(6,  0)
 
@@ -61,20 +49,9 @@ def _in_off(t: time) -> bool:
 
 def is_active_session(dt: datetime | None = None, tf: str = "M5") -> bool:
     """
-    Cek apakah saat ini dalam sesi trading aktif untuk timeframe yang diberikan.
-
-    Args:
-        dt : Waktu referensi (UTC-aware). Default = sekarang.
-        tf : Timeframe string, contoh 'M5', 'H4'.
-
-    Returns:
-        True  jika TF tidak difilter (H4/D1), atau jam dalam sesi aktif.
-        False hanya jika off session (02:00-06:00 WIB) untuk scalping M5/M15.
-
-    Catatan:
-        Asian session (06:00-14:00) TIDAK diblokir — bot tetap aktif.
-        is_asian_session() bisa dipakai untuk mengetahui apakah sedang Asian
-        agar evaluator bisa terapkan mode lebih selektif.
+    Cek sesi aktif untuk timeframe: True jika TF tak difilter (D1) atau dalam
+    jam sesi; False hanya saat off session (02:00-06:00 WIB) untuk M5/M15/H1/H4.
+    Asian (06:00-14:00) TIDAK diblokir — lihat is_asian_session() untuk mode selektif.
     """
     if tf.upper() in _UNFILTERED_TFS:
         return True
@@ -84,12 +61,8 @@ def is_active_session(dt: datetime | None = None, tf: str = "M5") -> bool:
 
     t = to_wib(dt).time()
 
-    # Blokir hanya off session (02:00-06:00 WIB) untuk M5/M15
-    if tf.upper() in ("M5", "M15") and _in_off(t):
-        return False
-
-    # H1 juga diblokir di off session (spread lebar, volume rendah)
-    if tf.upper() == "H1" and _in_off(t):
+    # Off session diblokir untuk semua intraday (H4 termasuk, kasus loss 22/09)
+    if tf.upper() in ("M5", "M15", "H1", "H4") and _in_off(t):
         return False
 
     return True
@@ -97,9 +70,8 @@ def is_active_session(dt: datetime | None = None, tf: str = "M5") -> bool:
 
 def is_asian_session(dt: datetime | None = None) -> bool:
     """
-    Cek apakah saat ini dalam sesi Asian (06:00-14:00 WIB).
-    Digunakan evaluator untuk terapkan mode lebih selektif di Asian:
-    scalping hanya boleh jika ada level kunci (SNR/Fib), bukan pure momentum.
+    Cek apakah dalam sesi Asian (06:00-14:00 WIB). Dipakai evaluator untuk mode
+    lebih selektif: scalping hanya boleh jika ada level kunci (SNR/Fib).
     """
     if dt is None:
         dt = datetime.now(_TZ_UTC)
@@ -109,10 +81,8 @@ def is_asian_session(dt: datetime | None = None) -> bool:
 
 def session_name(dt: datetime | None = None) -> str:
     """
-    Nama sesi trading aktif saat ini (WIB).
-
-    Returns:
-        'Overlap L+NY', 'London', 'New York', 'Asian', atau 'Off'.
+    Nama sesi trading aktif saat ini (WIB): 'Overlap L+NY', 'London',
+    'New York', 'Asian', atau 'Off'.
     """
     if dt is None:
         dt = datetime.now(_TZ_UTC)
@@ -135,15 +105,9 @@ def session_name(dt: datetime | None = None) -> str:
 
 def session_strictness(dt: datetime | None = None, tf: str = "M5") -> str:
     """
-    Kembalikan level keketatan filter untuk sesi saat ini.
-
-    Returns:
-        'NORMAL'  — London/NY/Overlap, kondisi optimal
-        'RELAXED' — Asian, izinkan sinyal tapi prioritaskan level kunci
-        'STRICT'  — transisi antar sesi, lebih hati-hati
-        'BLOCKED' — off session, tidak ada sinyal
-
-    Digunakan evaluator untuk menyesuaikan threshold confluence di Asian.
+    Keketatan filter sesi: NORMAL (London/NY/Overlap), RELAXED (Asian, prioritaskan
+    level kunci), STRICT (transisi), BLOCKED (off session). Dipakai evaluator untuk
+    menyesuaikan threshold confluence di Asian.
     """
     if dt is None:
         dt = datetime.now(_TZ_UTC)

@@ -192,13 +192,13 @@ def sheet_semua_sinyal(wb, records: list[dict]) -> None:
         "No", "Signal ID", "Tanggal (WIB)", "Simbol", "TF", "Arah", "Mode",
         "Entry", "Stop Loss", "TP1", "TP2", "TP3", "RR",
         "Trigger", "Confluence", "HTF Bias",
-        "Pattern", "Fibonacci", "SnR", "SnD", "Divergence", "Sesi",
+        "Pattern", "Fibonacci", "SnR", "SnD", "Divergence", "Sweep", "FVG", "Sesi",
         "Outcome",
         "TP1 Hit", "TP2 Hit", "TP3 Hit", "SL Hit",
         "Durasi (mnt)", "Harga Resolve", "Catatan",
     ]
     write_header_row(ws, 1, headers, bg=C_HEADER_BLUE)
-    for i, w in enumerate([4,38,20,9,5,6,14,10,10,10,10,10,6,10,10,22,18,20,16,20,14,10,10,20,20,20,20,12,14,20], 1):
+    for i, w in enumerate([4,38,20,9,5,6,14,10,10,10,10,10,6,10,10,22,18,20,16,20,14,12,12,10,20,20,20,20,12,14,20], 1):
         ws.column_dimensions[get_column_letter(i)].width = w
     ws.freeze_panes = "A2"
 
@@ -219,7 +219,8 @@ def sheet_semua_sinyal(wb, records: list[dict]) -> None:
             rec.get("trigger_score",""), rec.get("confluence_score",""), rec.get("htf_bias",""),
             rec.get("pattern_names",""), rec.get("fib_detail",""),
             rec.get("snr_detail",""),    rec.get("snd_detail",""),
-            rec.get("divergence_detail",""), rec.get("session_name",""), outcome,
+            rec.get("divergence_detail",""), rec.get("sweep_detail",""), rec.get("fvg_detail",""),
+            rec.get("session_name",""), outcome,
             iso_to_wib_excel(rec.get("tp1_hit_time","")), iso_to_wib_excel(rec.get("tp2_hit_time","")),
             iso_to_wib_excel(rec.get("tp3_hit_time","")), iso_to_wib_excel(rec.get("sl_hit_time","")),
             int(rec.get("duration_minutes", 0) or 0),

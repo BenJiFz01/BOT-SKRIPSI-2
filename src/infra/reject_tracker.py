@@ -1,26 +1,7 @@
-"""reject_tracker.py — Tracking dan summary rejection sinyal untuk monitoring & tuning.
+"""reject_tracker.py — Tracking & summary rejection sinyal untuk monitoring.
 
-Cara pakai:
-    tracker = RejectTracker()
-    tracker.record(symbol, tf, raw_reason, df)   # setiap kali sinyal reject
-    tracker.maybe_print_summary()                # panggil tiap loop — auto print tiap 30 menit
-
-Output terminal tiap 30 menit:
-    ══════════════════════════════════════════════════════
-     REJECT SUMMARY  XAUUSD  |  30 menit terakhir
-    ══════════════════════════════════════════════════════
-     Candle close : 42    Signal : 0    Reject : 42
-    ──────────────────────────────────────────────────────
-     #1  EMA200_WAJIB       18x (43%)  M5=12 M15=6
-     #2  CONFLUENCE_FAIL     8x (19%)  H1=5 H4=3
-     #3  BIAS_FAIL           7x (17%)  H4=4 D1=3
-     #4  TRIGGER_FAIL        5x (12%)  M15=3 H1=2
-     #5  ATR_TOO_LOW         3x  (7%)  M5=3
-         COOLDOWN            1x  (2%)  M5=1
-    ──────────────────────────────────────────────────────
-     Tuning hint : EMA200_WAJIB dominan → harga sedang koreksi,
-                   normal — tunggu harga kembali di atas EMA200
-    ══════════════════════════════════════════════════════
+Cara pakai: RejectTracker().record(symbol, tf, reason, df) lalu
+maybe_print_summary() tiap loop — auto print summary 30 menit ke terminal.
 """
 
 import re
@@ -173,21 +154,13 @@ def _categorize(raw: str) -> str:
 
 
 def _extract_context(raw: str, df: pd.DataFrame | None) -> str:
-    """
-    Ekstrak info konteks spesifik dari raw reason + DataFrame
-    untuk ditampilkan di baris log per-TF.
-
-    Contoh output:
-      EMA200_WAJIB  → "close=4395.2 EMA200=4412.8 gap=17.6pts (1.1×ATR)"
-      CONFLUENCE    → "skor=1/2"
-      TRIGGER_FAIL  → "skor=2/4"
-      RR_FAIL       → "RR=1.1 min=1.5"
+    """Ekstrak konteks dari raw reason + df untuk baris log per-TF.
+    Contoh: "close=4395.2 EMA200=4412.8 gap=17.6pts (1.1×ATR)" / "skor=1/2".
     """
     raw_up = raw.upper()
 
     # EMA200_WAJIB: tampilkan close vs EMA200 dan gap dalam ATR (dari df)
     if raw_up.startswith("EMA200_WAJIB") or raw_up.startswith("CT_EMA200"):
-        # Coba ambil dari df dulu
         if df is not None:
             try:
                 last   = df.iloc[-2]
@@ -346,13 +319,8 @@ def _extract_context(raw: str, df: pd.DataFrame | None) -> str:
 
 
 class RejectTracker:
-    """
-    Melacak semua rejection sinyal dan mencetak summary periodik.
-
-    Menyimpan:
-      - Jumlah total candle close & signal per sesi
-      - Breakdown reject per kategori + per TF
-      - Timestamp window untuk summary 30 menit
+    """Melacak rejection sinyal dan mencetak summary periodik (30 menit):
+    total candle/signal per sesi, breakdown reject per kategori + per TF.
     """
 
     def __init__(self, interval_minutes: int = _SUMMARY_INTERVAL_MIN) -> None:
@@ -364,9 +332,7 @@ class RejectTracker:
         self._candle_count:  int = 0
         self._signal_count:  int = 0
         self._reject_count:  int = 0
-        # {category: {tf: count}}
         self._cat_tf: dict[str, dict[str, int]] = defaultdict(lambda: defaultdict(int))
-        # {category: total_count}
         self._cat_total: dict[str, int] = defaultdict(int)
 
     def record_candle(self) -> None:
@@ -384,12 +350,8 @@ class RejectTracker:
         raw:       str,
         df:        pd.DataFrame | None = None,
     ) -> str:
-        """
-        Catat satu rejection dan kembalikan baris log ringkas untuk dicetak
-        oleh caller (biasanya dengan prefix │ di dalam tree ┌─/└─).
-
-        Format return:
-          "XAUUSD M5  ✗  EMA200_WAJIB     | close=4395.2 EMA200=4412.8 gap=17.6pts (1.1×ATR)"
+        """Catat rejection, kembalikan baris log ringkas untuk dicetak caller.
+        Format: "XAUUSD M5 ✗ EMA200_WAJIB | close=4395.2 EMA200=4412.8 gap=17.6pts".
         """
         cat     = _categorize(raw)
         ctx     = _extract_context(raw, df)
@@ -410,10 +372,7 @@ class RejectTracker:
         return line
 
     def maybe_print_summary(self, symbol: str = "XAUUSD") -> None:
-        """
-        Cetak summary jika sudah melewati interval (default 30 menit).
-        Panggil di setiap iterasi main loop.
-        """
+        """Cetak summary jika sudah lewat interval (default 30 mnt); panggil tiap loop."""
         now = datetime.utcnow()
         if now - self._window_start < self._interval:
             return
@@ -455,7 +414,6 @@ class RejectTracker:
 
         lines.append(divider)
 
-        # Sort by count descending
         sorted_cats = sorted(
             self._cat_total.items(), key=lambda x: x[1], reverse=True
         )

@@ -4,7 +4,9 @@ from pydantic import BaseModel
 
 
 Direction  = Literal["BUY", "SELL"]
-SignalMode = Literal["CONTINUATION", "REVERSAL", "BREAKOUT"]
+SignalMode = Literal[
+    "CONTINUATION", "REVERSAL", "BREAKOUT", "BREAK_RETEST", "MOMENTUM",
+]
 
 
 class Signal(BaseModel):
@@ -16,7 +18,7 @@ class Signal(BaseModel):
 
     # Klasifikasi
     signal_type: str       = "LIVE"          # "LIVE" | "SETUP"
-    signal_mode: SignalMode = "CONTINUATION"  # "CONTINUATION" | "REVERSAL" | "BREAKOUT"
+    signal_mode: SignalMode = "CONTINUATION"  # "CONTINUATION" | "REVERSAL" | "BREAKOUT" | "PULLBACK"
     is_setup_plan: bool    = False
 
     # Entry
@@ -44,6 +46,7 @@ class Signal(BaseModel):
     confluence_score: int = 0
     confidence:       int = 0
     htf_bias:         str = ""
+    htf_bias_all:     str = ""
 
     # Detail komponen
     trigger_notes:     str = ""
@@ -53,6 +56,8 @@ class Signal(BaseModel):
     snr_detail:        str = ""
     snd_detail:        str = ""
     divergence_detail: str = ""
+    sweep_detail:      str = ""
+    fvg_detail:        str = ""
 
     # Metadata
     session_name: str   = ""

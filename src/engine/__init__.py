@@ -1,10 +1,8 @@
 """engine — Rule-Based DSS trading engine.
 
-Modul aktif:
-  anytf_mta_engine — Engine utama 5-gate (evaluate_any_tf_mta + scan_setup_plan)
-
-Modul lain (tersedia tapi tidak aktif di main loop):
-  evaluator, classifier, bias, trigger, confluence, analysis_core, helpers
+anytf_mta_engine — Orchestrator 5-gate (evaluate_any_tf_mta + scan_setup_plan).
+Implementasi tiap gate dipecah ke submodul: bias, state, trigger, confluence,
+setup_plan, cooldown, utils.
 """
 
 from src.engine.anytf_mta_engine import evaluate_any_tf_mta, scan_setup_plan

@@ -20,7 +20,7 @@ PATTERN_FUNCS: dict[str, object] = {
 }
 
 PATTERN_NEUTRAL = {"CDLDOJI", "CDLSPINNINGTOP"}
-# ── Filter body-size ────
+# Filter body-size
 _MIN_BODY_RATIO   = 0.40   
 _BODY_LOOKBACK    = 10    
 _SKIP_BODY_FILTER = {"CDLDOJI", "CDLSPINNINGTOP"} 

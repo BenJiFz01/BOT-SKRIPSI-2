@@ -1,8 +1,6 @@
 ﻿"""time_utils.py — Utilitas konversi waktu terpusat (WIB / UTC+7).
 
-Semua konversi ke WIB di project ini menggunakan modul ini.
-Sebelumnya tersebar di: session.py, templates.py, signal_logger.py,
-laporan_excel.py, signal_tracker.py.
+Semua konversi ke WIB di project ini memakai modul ini.
 """
 
 from datetime import datetime, timedelta, timezone
@@ -36,16 +34,7 @@ def iso_to_wib_str(iso_str: str, fmt: str = "%Y-%m-%d %H:%M WIB") -> str:
     """
     Konversi string ISO datetime ke string WIB yang dapat dibaca.
 
-    Args:
-        iso_str: String datetime format ISO, misal '2024-01-15T08:30:00+00:00'.
-        fmt:     Format output. Default: '%Y-%m-%d %H:%M WIB'.
-
-    Returns:
-        String waktu dalam WIB, atau iso_str asli jika parsing gagal.
-
-    Aturan konversi:
-      - Ada offset timezone (mis. '...T05:15:00+00:00') → dikonversi ke WIB.
-      - Naive tanpa offset → diasumsikan sudah WIB (diisi tzinfo WIB), diformat apa adanya.
+    Naive dianggap sudah WIB; yang ada offset-nya dikonversi. Return iso_str asli jika parsing gagal.
     """
     if not iso_str:
         return ""

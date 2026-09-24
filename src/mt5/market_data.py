@@ -1,14 +1,7 @@
 ﻿"""market_data.py — Ambil data OHLCV dari MetaTrader 5.
 
-PENTING — Zona waktu:
-MT5 copy_rates mengembalikan timestamp dalam zona waktu SERVER (misal
-MetaQuotes-Demo = UTC+3 saat musim panas, UTC+2 musim dingin), BUKAN UTC.
-Jika timestamp ini dianggap UTC, semua konversi jam WIB/sesi meleset ~3 jam
-(contoh bug: Asian 11:25 WIB terhitung sebagai London 14:25 WIB).
-
-Solusi: konversi timestamp server ke UTC-naive di sini memakai offset dari
-mt5.terminal_info().timezone (detik dari UTC), dengan override manual via env
-MT5_SERVER_UTC_OFFSET_HOURS bila bank/server aneh.
+PENTING — MT5 copy_rates mengembalikan timestamp zona waktu SERVER (bukan UTC);
+ofset diambil dari mt5.terminal_info().timezone, override via env MT5_SERVER_UTC_OFFSET_HOURS.
 """
 
 import os
@@ -46,8 +39,7 @@ def _server_utc_offset_seconds() -> int:
 def fetch_ohlc(symbol: str, tf: str, n_bars: int = 500) -> pd.DataFrame:
     """Ambil n_bars candle dari MT5 untuk symbol dan timeframe. Raise RuntimeError jika gagal.
 
-    Timestamp dikonversi ke UTC-naive agar engine (session, cooldown, tampilan WIB)
-    selalu menghitung dengan referensi waktu yang benar.
+    Timestamp dikonversi ke UTC-naive agar engine (session, cooldown, WIB) konsisten.
     """
     tf_id = TF_MAP.get(tf.upper())
     if tf_id is None:

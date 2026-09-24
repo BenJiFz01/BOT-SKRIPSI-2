@@ -29,9 +29,7 @@ def _sanitize_html(text: str) -> str:
 
 def send_message(token: str, chat_id: str, text: str) -> None:
     """
-    Kirim pesan HTML ke chat_id via Telegram Bot API.
-    Tidak melempar exception — error di-log sebagai warning.
-    Jika HTML parsing gagal (400), retry dengan plain text.
+    Kirim pesan HTML ke chat_id. Tidak melempar exception; fallback plain text jika parse HTML gagal (400).
     """
     url       = f"https://api.telegram.org/bot{token}/sendMessage"
     safe_text = _sanitize_html(text)

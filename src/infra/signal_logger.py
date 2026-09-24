@@ -20,8 +20,9 @@ CSV_FIELDS = [
     "signal_mode", "trade_mode", "is_setup_plan", "exec_tf", "candle_close",
     "entry", "sl", "tp1", "tp2", "tp3", "rr", "rr_tp2_actual",
     "trigger_score", "confluence_score", "htf_bias",
-    "trigger_notes", "confluence_notes", "pattern_names",
+"trigger_notes", "confluence_notes", "pattern_names",
     "fib_detail", "snr_detail", "snd_detail", "divergence_detail",
+    "sweep_detail", "fvg_detail",
     "session_name", "sl_method", "atr_value",
     "outcome", "outcome_price", "outcome_time",
     "tp1_hit_time", "tp2_hit_time", "tp3_hit_time", "sl_hit_time",
@@ -35,10 +36,12 @@ _COMPONENT_FIELDS: dict[str, str] = {
     "RSI":        "trigger_notes",
     "MACD":       "trigger_notes",
     "PATTERN":    "pattern_names",
-    "DIVERGENCE": "divergence_detail",
+"DIVERGENCE": "divergence_detail",
     "FIBONACCI":  "fib_detail",
     "SNR":        "snr_detail",
     "SND":        "snd_detail",
+    "SWEEP":      "sweep_detail",
+    "FVG":        "fvg_detail",
 }
 _COMP_KEYWORDS: dict[str, str] = {
     "EMA200":     "EMA200+",
@@ -50,6 +53,8 @@ _COMP_KEYWORDS: dict[str, str] = {
     "FIBONACCI":  "",
     "SNR":        "SNR_OK",
     "SND":        "",
+    "SWEEP":      "SWEEP_OK",
+    "FVG":        "FVG_OK",
 }
 
 
@@ -82,6 +87,8 @@ class SignalRecord:
     snr_detail:        str
     snd_detail:        str
     divergence_detail: str
+    sweep_detail:      str
+    fvg_detail:        str
     session_name:      str
     sl_method:         str
     atr_value:         float
@@ -104,11 +111,8 @@ def _make_signal_id(symbol: str, tf: str, timestamp: str) -> str:
 
 
 class SignalLogger:
-    """Pencatat histori sinyal ke CSV dan JSON.
-
-    Thread-safe: semua operasi baca/tulis file dilindungi _lock
-    untuk mencegah race condition antara main loop dan SignalTracker
-    yang bisa menyebabkan JSON corrupt (double-closing brace, dll).
+    """Pencatat histori sinyal ke CSV dan JSON; thread-safe via _lock untuk
+    mencegah race condition (rawan JSON corrupt antara main loop dan tracker).
     """
 
     def __init__(
@@ -135,10 +139,8 @@ class SignalLogger:
             return {}
 
     def _save(self, data: dict[str, dict]) -> None:
-        """Tulis JSON atomic — harus dipanggil di dalam _lock.
-
-        Tulis ke file .tmp dulu, baru rename ke file asli.
-        Ini mencegah file terpotong setengah jika proses crash saat nulis.
+        """Tulis JSON atomic (harus dipanggil di dalam _lock): tulis ke .tmp lalu
+        rename, mencegah file terpotong setengah jika crash saat nulis.
         """
         tmp = self.json_path.with_suffix(".tmp")
         with open(tmp, "w", encoding="utf-8") as f:
@@ -189,6 +191,8 @@ class SignalLogger:
             snr_detail        = sig.snr_detail,
             snd_detail        = sig.snd_detail,
             divergence_detail = sig.divergence_detail,
+            sweep_detail      = sig.sweep_detail,
+            fvg_detail        = sig.fvg_detail,
             session_name      = sig.session_name,
             sl_method         = sig.sl_method,
             atr_value         = round(sig.atr_value, 4),

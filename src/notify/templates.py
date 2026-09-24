@@ -9,6 +9,18 @@ _MODE_TAG: dict[str, str] = {
     "CONTINUATION": "",
     "REVERSAL":     " ⟨REVERSAL⟩",
     "BREAKOUT":     " ⟨BREAKOUT⟩",
+    "BREAK_RETEST": " ⟨BREAK_RETEST⟩",
+    "MOMENTUM":     " ⟨MOMENTUM⟩",
+    "PULLBACK":     " ⟨PULLBACK⟩",
+}
+
+_MODE_EXPLAIN: dict[str, str] = {
+    "CONTINUATION": "Searah trend (ikut bias HTF)",
+    "PULLBACK":     "Pullback rebound dalam trend — setup sah, jalur masuk beda dari trigger normal",
+    "REVERSAL":     "Lawan trend — butuh divergence sbg konfirmasi",
+    "BREAKOUT":     "Breakout level kunci",
+    "BREAK_RETEST": "Breakout lalu retest level — tunggu konfirmasi retest pasca-break, bukan kejar breakout",
+    "MOMENTUM":     "Momentum kuat searah — tubuh candle meyakinkan, masuk setelah momentum terkonfirmasi",
 }
 
 
@@ -32,7 +44,17 @@ def _rr_label(sig: Signal, tp: float | None) -> str:
 def _htf_fmt(bias_str: str) -> str:
     _arrow = {"BULL": "↑", "BEAR": "↓", "NEUTRAL": "→"}
     parts: list[str] = []
+    recovery: str | None = None
     for item in bias_str.strip().split():
+        if item.startswith("[MOM_RECOVERY:"):
+            m = re.match(r"\[MOM_RECOVERY:(\w+)\((.*)\)\]", item)
+            if m:
+                dir_b   = m.group(1)
+                detail  = m.group(2).split(",")
+                recovery = f"→ Recovery:{_arrow.get(dir_b, dir_b)} {dir_b}"
+                if detail:
+                    recovery += f" ({','.join(detail)})"
+            continue
         if item.startswith("["):
             continue   # skip token debug seperti [TF_FAIL:H4_diperlukan]
         if ":" in item:
@@ -40,7 +62,10 @@ def _htf_fmt(bias_str: str) -> str:
             parts.append(f"{tf} {_arrow.get(b.upper(), b)}")
         else:
             parts.append(item)
-    return "  ".join(parts)
+    s = "  ".join(parts)
+    if recovery:
+        s = f"{s}  {recovery}" if s else recovery
+    return s
 
 
 def _entry_zone_lines(sig: Signal) -> list[str]:
@@ -71,26 +96,45 @@ def _entry_zone_lines(sig: Signal) -> list[str]:
         ]
 
 
+def _pullback_summary(sig: Signal) -> str:
+    """Ringkasan skor pullback (X/4) — pengganti 'Trigger X/6' utk mode PULLBACK."""
+    m = re.search(r"PULLBACK\[([\w,\+\-]+)\]", sig.trigger_notes or "")
+    if not m:
+        return "↩️ Pullback"
+    checks = m.group(1).split(",")
+    ok = sum(1 for c in checks if c.endswith("+"))
+    return f"↩️ Pullback {ok}/{len(checks)}"
+
+
+def _pullback_checks(sig: Signal) -> list[str]:
+    """Checklist konfirmasi pullback (rejection/rsi/momentum/div) utk template."""
+    m = re.search(r"PULLBACK\[([\w,\+\-]+)\]", sig.trigger_notes or "")
+    if not m:
+        return []
+    checks = m.group(1).split(",")
+    parts = [f"{c[:-1]}{'✓' if c.endswith('+') else '✗'}" for c in checks]
+    return ["↩️ <b>Pullback Setup</b>  " + "  ".join(parts)]
+
+
 def _technical_section(sig: Signal) -> list[str]:
     L: list[str] = []
     L.append("─────────────────────")
     L.append("📈 <b>Analisis Teknikal</b>")
     L.append("")
 
-    # HTF Bias
     if sig.htf_bias and sig.htf_bias.strip():
         L.append("🗺 <b>HTF Bias</b>")
         L.append(f"   <code>{_htf_fmt(sig.htf_bias)}</code>")
+        if sig.htf_bias_all and sig.htf_bias_all.strip():
+            L.append(f"   <code>Stack: {_htf_stack_compact(sig.htf_bias_all)}</code>")
         L.append("")
 
-    # ── Confluence — rinci per komponen ──────────────────────────────────────
+    # Confluence — rinci per komponen
     confluences: list[str] = []
 
-    # Pattern
     if sig.pattern_names:
         confluences.append(f"✓ <b>Pattern</b>: {sig.pattern_names}")
 
-    # Fibonacci
     if sig.fib_detail:
         fib_clean = sig.fib_detail.split('|')[0]
         fib_clean = fib_clean.replace('FIB_STRONG', 'Strong').replace('FIB_NEAR', 'Near').replace('FIB_GOLD', 'Golden')
@@ -127,9 +171,19 @@ def _technical_section(sig: Signal) -> list[str]:
         else:
             confluences.append(f"✓ <b>S&D {zone_type}</b> zone")
 
-    # Divergence
     if sig.divergence_detail:
         confluences.append(f"✓ <b>Divergence</b>: {sig.divergence_detail}")
+
+    # Liquidity Sweep — entry-timing scalping
+    if sig.sweep_detail:
+        confluences.append(f"✓ <b>Liquidity Sweep</b>: {sig.sweep_detail}")
+
+    # FVG — entry-timing scalping
+    if sig.fvg_detail:
+        fvg_disp = sig.fvg_detail
+        if fvg_disp.startswith("FVG_OK("):
+            fvg_disp = fvg_disp[len("FVG_OK("):-1]
+        confluences.append(f"✓ <b>FVG</b>: {fvg_disp}")
 
     # Trigger komponen (EMA, RSI, MACD, Candle) — ringkas dari trigger_notes
     if sig.trigger_notes:
@@ -164,12 +218,20 @@ def _technical_section(sig: Signal) -> list[str]:
         info.append(f"{sess_emoji} {sig.session_name}")
     if sig.atr_value and sig.atr_value > 0:
         info.append(f"ATR {sig.atr_value:.2f}")
-    if sig.trigger_score and sig.trigger_max:
+    if sig.trigger_notes and sig.trigger_notes.startswith("PULLBACK["):
+        info.append(_pullback_summary(sig))
+    elif sig.trigger_score and sig.trigger_max:
         info.append(f"⚡ Trigger {sig.trigger_score}/{sig.trigger_max}")
     if sig.confluence_score is not None:
         info.append(f"Conf {sig.confluence_score}")
     if info:
         L.append("📊 " + " | ".join(info))
+
+    if sig.trigger_notes and sig.trigger_notes.startswith("PULLBACK["):
+        checks = _pullback_checks(sig)
+        if checks:
+            L.extend(checks)
+            L.append("")
 
     return L
 
@@ -195,14 +257,32 @@ def _position_section(sig: Signal) -> list[str]:
     ]
 
 
+def _htf_stack_compact(all_bias_str: str) -> str:
+    """Stack bias lintas-TF — versi RINGKAS (display-only): tiap TF hanya verdict
+    BULL/BEAR/NEUTRAL; tail detail teknikal (harga_antara_MA e50=... dst) dipangkas.
+    Aditif — tak menyentuh skor/gate/threshold engine."""
+    toks: list[str] = []
+    for tok in all_bias_str.split():
+        base = tok.split("(", 1)[0]
+        if base.strip():
+            toks.append(base)
+    return _htf_fmt(" ".join(toks))
+
+
 def _format_live(sig: Signal, signal_id: str, signal_mode: str) -> str:
     trade_mode = sig.trade_mode or "intraday"
     mode_tag   = _MODE_TAG.get(signal_mode, "")
 
     if signal_mode == "BREAKOUT":
         h_emoji = "⚡"
+    elif signal_mode == "BREAK_RETEST":
+        h_emoji = "🔄"
+    elif signal_mode == "MOMENTUM":
+        h_emoji = "🔥"
     elif signal_mode == "REVERSAL":
         h_emoji = "🔵" if sig.direction == "BUY" else "🟠"
+    elif signal_mode == "PULLBACK":
+        h_emoji = "↩️" if sig.direction == "BUY" else "↪️"
     else:
         h_emoji = "🚀" if sig.direction == "BUY" else "🔻"
 
@@ -217,22 +297,21 @@ def _format_live(sig: Signal, signal_id: str, signal_mode: str) -> str:
     rr_str  = f"{sig.rr:.2f}R" if sig.rr  else "—"
 
     L: list[str] = []
-    # Header - more prominent
     L.append(f"{h_emoji} <b>LIVE {sig.direction}</b>{mode_tag}  {dir_emoji}  {mode_emoji} <b>{mode_text}</b>")
     L.append(f"<b>{sig.symbol}</b> | <b>{sig.tf}</b> | {iso_to_wib_str(sig.close_time)}")
-    
-    # Signal ID - more visible
+
+    if signal_mode in _MODE_EXPLAIN:
+        L.append(f"ℹ️ <i>{_MODE_EXPLAIN[signal_mode]}</i>")
+
     if signal_id:
         L.append(f"🆔 <code>{signal_id}</code>")
-    
+
     L.append("")
     L.append("─────────────────────")
-    
-    # Entry zone with stronger warning
+
     entry_lines = _entry_zone_lines(sig)
     for line in entry_lines:
         if "Skip" in line:
-            # Make warning more visible
             L.append(f"<b>{line}</b>")
         else:
             L.append(line)
@@ -249,7 +328,7 @@ def _format_live(sig: Signal, signal_id: str, signal_mode: str) -> str:
     L.append("")
     L.append("─────────────────────")
     
-    # Footer - simplified (no duplicate direction)
+    # Footer (tanpa duplikasi direction)
     if sig.reason and sig.reason.strip():
         L.append(f"💡 <i>{sig.reason}</i>")
         L.append("")
@@ -285,6 +364,10 @@ def _format_setup(sig: Signal, signal_id: str, signal_mode: str) -> str:
     L: list[str] = []
     L.append(f"📋 <b>SETUP {sig.direction}</b>{mode_tag}  {dir_emoji}  {mode_emoji} {mode_text}")
     L.append(f"<b>{sig.symbol}</b> | {sig.tf} | {iso_to_wib_str(sig.close_time)}")
+
+    if signal_mode in _MODE_EXPLAIN:
+        L.append(f"ℹ️ <i>{_MODE_EXPLAIN[signal_mode]}</i>")
+
     if signal_id:
         L.append(f"<code>{signal_id}</code>")
     L.append("")

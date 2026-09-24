@@ -252,10 +252,8 @@ def snr_confluence_score(
 ) -> tuple[int, str]:
     """Skor konfluensi S/R: 0 atau 1.
 
-    Search order freshness:
-      1. FRESH zones (near_factor ketat)           → tag FRESH
-      2. AGED zones (near_factor + 0.3×ATR lebih longgar) → tag AGED_FALLBACK
-    Obstacle check (_has_clear_road) tetap cek SEMUA zona tanpa pembedaan.
+    Search: FRESH (near_factor ketat) dulu, lalu AGED (longgar +0.3×ATR) → tag AGED_FALLBACK.
+    Obstacle check (_has_clear_road) tetap cek SEMUA zona.
     """
     if atr <= 0:
         return 0, "SNR_SKIP"
@@ -269,7 +267,6 @@ def snr_confluence_score(
     near_thr_fresh = near_factor * atr
     near_thr_aged  = (near_factor + 0.3) * atr   # lebih longgar untuk level lama yang lebih "mayor"
 
-    # Pisahkan berdasarkan tipe zona yang relevan
     if direction == "BUY":
         same_type = [z for z in zones
                      if z.zone_type == "SUPPORT" and z.center <= entry_price]
@@ -285,7 +282,6 @@ def snr_confluence_score(
             return 0, f"SNR_FAR(nearest={nearest.center:.2f} t={nearest.touches})"
         return 0, "SNR_FAR(no_zone)"
 
-    # Search order: FRESH dulu (ketat), baru AGED (longgar)
     fresh_cands = [z for z in same_type
                    if z.freshness == "FRESH"
                    and abs(entry_price - z.center) <= near_thr_fresh]
@@ -302,7 +298,6 @@ def snr_confluence_score(
         nearest = min(same_type, key=lambda z: abs(z.center - entry_price))
         return 0, f"SNR_FAR(nearest={nearest.center:.2f} t={nearest.touches} {nearest.freshness})"
 
-    # Obstacle check — pakai SEMUA zona (FRESH+AGED), tidak dilemahkan oleh freshness
     if sl > 0 and not _has_clear_road(direction, entry_price, sl, tp1_rr, zones, atr):
         return 0, f"SNR_BLOCKED(clear_road {best.zone_type[:3]}={best.center:.2f})"
 

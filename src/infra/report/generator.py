@@ -19,17 +19,9 @@ REPORT_DIR = Path("logs/report")
 
 
 def generate_report(logger: SignalLogger | None = None, silent: bool = False) -> Path:
-    """
-    Generate / update laporan Excel ke logs/report/laporan_trading.xlsx.
-    File selalu ditimpa agar tidak menumpuk.
-
-    Args:
-        logger: SignalLogger instance. Jika None, dibuat baru.
-        silent: Jika True, tidak print ke terminal (untuk auto-update dari main).
-
-    Returns:
-        Path ke file Excel.
-    """
+    """Generate/update laporan Excel ke logs/report/laporan_trading.xlsx (selalu
+    ditimpa). logger: SignalLogger (buat baru jika None); silent: tanpa print
+    terminal. Returns: Path ke file Excel."""
     if logger is None:
         logger = SignalLogger()
 

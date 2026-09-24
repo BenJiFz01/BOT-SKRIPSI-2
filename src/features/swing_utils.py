@@ -4,8 +4,7 @@ import numpy as np
 import pandas as pd
 
 
-# ── Array-based (numpy) ──────────────────────────────────────────────────────
-# Digunakan oleh divergence.py — bekerja di atas numpy array.
+# Array-based — dipakai divergence.py (bekerja di atas numpy array).
 
 def swing_lows_idx(series: np.ndarray, left: int = 3, right: int = 3) -> list[int]:
     """
@@ -31,8 +30,7 @@ def swing_highs_idx(series: np.ndarray, left: int = 3, right: int = 3) -> list[i
     ]
 
 
-# ── DataFrame-based (pivot) ──────────────────────────────────────────────────
-# Digunakan oleh fibonacci.py — kembalikan (index, harga) untuk pencarian swing.
+# DataFrame-based (pivot) — dipakai fibonacci.py untuk pencarian swing (index, harga).
 
 def pivot_highs(df: pd.DataFrame, window: int = 3) -> list[tuple[int, float]]:
     """Cari pivot high dari DataFrame OHLC.
@@ -65,8 +63,7 @@ def pivot_lows(df: pd.DataFrame, window: int = 3) -> list[tuple[int, float]]:
     return result
 
 
-# ── Price-list (S/R clustering) ───────────────────────────────────────────────
-# Digunakan oleh zones_snr.py — kembalikan list harga swing untuk clustering.
+# Price-list — dipakai zones_snr.py untuk S/R clustering.
 
 def swing_high_prices(df: pd.DataFrame, left: int = 3, right: int = 3) -> list[float]:
     """
@@ -100,9 +97,8 @@ def swing_low_prices(df: pd.DataFrame, left: int = 3, right: int = 3) -> list[fl
     return result
 
 
-# ── Idx+Price (S/R freshness) ─────────────────────────────────────────────────
-# Versi dengan indeks — digunakan oleh zones_snr.py untuk menghitung age_bars.
-# Tidak mengganti swing_high_prices / swing_low_prices agar tidak break caller lama.
+# Idx+Price — dipakai zones_snr.py untuk menghitung age_bars.
+# Tidak mengganti swing_high_prices/low_prices agar tidak break caller lama.
 
 def swing_high_idx_prices(
     df: pd.DataFrame, left: int = 3, right: int = 3

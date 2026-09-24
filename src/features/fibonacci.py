@@ -8,8 +8,6 @@ import pandas as pd
 from src.features.swing_utils import pivot_highs, pivot_lows
 
 
-# ── Config ────────────────────────────────────────────────────────────────────
-
 @dataclass(frozen=True)
 class FibConfig:
     fib_tf:          str
@@ -58,8 +56,6 @@ _CONF_CFG: dict[str, FibConfig] = {
 _ALL_LEVELS = [0.236, 0.382, 0.5, 0.618, 0.786]
 _WEAK_LEVEL = 0.236
 
-
-# ── Helpers ───────────────────────────────────────────────────────────────────
 
 def _get_area_config(is_scalping: bool) -> FibConfig:
     return FIB_SCALPING_AREA if is_scalping else FIB_INTRADAY_AREA
@@ -117,8 +113,6 @@ def _check_fib_confluence(
     tolerance = conf_cfg.zone_tolerance * conf_atr
     return abs(entry_price - px) <= tolerance
 
-
-# ── Swing & Level ─────────────────────────────────────────────────────────────
 
 def last_swing(
     df:           pd.DataFrame,
@@ -188,9 +182,8 @@ def recent_swings(
 ) -> list[tuple[float, float, str]]:
     """Cari beberapa swing terakhir, diurutkan dari yang TERBARU.
 
-    Identik dengan last_swing tapi terus mencari hingga max_results ditemukan
-    atau pivot habis, alih-alih berhenti di swing pertama.
-    Digunakan oleh fib_confluence_score untuk fallback ke swing yang lebih lama.
+    Identik dengan last_swing tapi lanjut mencari hingga max_results ditemukan
+    atau pivot habis. Dipakai fib_confluence_score sebagai fallback swing lama.
     """
     if len(df) < lookback + 5:
         return []
@@ -287,8 +280,6 @@ def _score_level(name: str, px: float, strong_levels: frozenset[float]) -> tuple
     return 1, f"FIB_NEAR({name}={px:.2f})"
 
 
-# ── Fungsi utama ──────────────────────────────────────────────────────────────
-
 def fib_confluence_score(
     direction:   str,
     entry_price: float,
@@ -300,14 +291,9 @@ def fib_confluence_score(
 ) -> tuple[int, str]:
     """Skor konfluensi Fibonacci: 0, 1, atau 2+bonus.
 
-    Fallback swing: coba swing terbaru (rank-0) dulu.
-    Jika levelnya terlalu jauh dari entry, coba swing sebelumnya (rank-1, rank-2).
-    Swing lama sering punya level lebih "mayor" dan tetap valid secara struktural.
-    Tag output: FRESH (swing rank-0) atau FALLBACK_SWING2/3 (swing lama).
-
-    Confluence set (konsisten dengan SNR/SND):
-      Scalping : bonus dari H4 + H1
-      Intraday : bonus dari D1 + H4
+    Fallback ke swing lama (rank-1/2) jika level swing terbaru terlalu jauh dari entry.
+    Tag: FRESH (rank-0) atau FALLBACK_SWING2/3. Confluence set konsisten SNR/SND:
+    Scalping = H4+H1; Intraday = D1+H4.
     """
     if atr <= 0:
         return 0, "FIB_SKIP"
@@ -345,7 +331,7 @@ def fib_confluence_score(
             base_score = sc
             base_label = lbl
             swing_tag  = "FRESH" if rank == 0 else f"FALLBACK_SWING{rank + 1}"
-            break   # pakai yang ini
+            break
 
     if base_score == 0:
         return 0, f"FIB_FAR(no_swing_near tol={tolerance:.1f})"

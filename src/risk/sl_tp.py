@@ -1,27 +1,10 @@
 """sl_tp.py — Stop Loss & Take Profit: Structural + ATR-based.
 
-Prinsip:
-  SL = Structural point (swing high/low terdekat) + 0.5×ATR buffer
-       Fallback ke 1.5×ATR flat jika swing tidak ditemukan dalam batas cap.
+SL = swing point terdekat + 0.5×ATR buffer (anti stop-hunt), fallback atr_mult×ATR
+(scalping 1.2×, intraday 1.5×). Entry zone 0.3×ATR. SL di-cap per TF.
 
-  Buffer 0.5×ATR (naik dari 0.3) sengaja lebih lebar untuk:
-    - Melewati zona stop-hunt di sekitar swing level yang terlihat jelas
-    - Retail stop-loss sering ngumpul persis di bawah/atas swing → mudah diburu
-    - 0.5×ATR ≈ separuh pergerakan rata-rata 1 candle → cukup untuk skip noise
-    - Konsekuensi: SL sedikit lebih lebar; RR runner tetap proporsional (TP2/TP3 dari sl_dist)
-
-  Entry zone = 0.3×ATR dari close candle → zona masuk yang realistis
-  SL di-cap per TF (dari settings) supaya tidak terlalu lebar
-
-  TP:
-    Scalping → TP1 = tp1_atr_mult × ATR — kunci profit cepat, independen dari
-               lebar SL (default 1.0×ATR). Dulu TP1=1.0R dari SL → ikut melebar
-               saat SL lebar (bisa ~180 pip), terlalu jauh untuk M15.
-               TP2=1.6R / TP3=2.6R tetap proporsional ke SL (runner).
-    Intraday → TP1=1.5R, TP2=2.5R, TP3=4.0R (proporsional ke SL)
-
-  Gate RR engine mengukur rr_tp2 (runner) sebagai RR struktural, bukan rr TP1 —
-  karena TP1 dirancang sebagai kunci profit cepat, RR-nya bisa < 1.
+TP: scalping ladder proporsional 0.7/1.0/1.3R, intraday 1.5/2.5/4.0R.
+Gate RR dicabut (TP proporsional SL) → penggantinya OVEREXTENSION guard di engine.
 """
 import math
 from dataclasses import dataclass, field
@@ -31,7 +14,7 @@ import pandas as pd
 from src.features.swing_utils import pivot_highs, pivot_lows
 
 
-# ── Config ────────────────────────────────────────────────────────────────────
+# Config
 
 @dataclass(frozen=True)
 class _SlConfig:
@@ -49,15 +32,15 @@ class _TpConfig:
     tp1_atr_mult: float = 0.0   # >0 → TP1 = tp1_atr_mult × ATR (independen SL)
 
 
-_SL_SCALPING = _SlConfig(atr_mult=1.2, min_sl_pts=5.0,  max_sl_pts=20.0, lookback=20)
+_SL_SCALPING = _SlConfig(atr_mult=1.2, min_sl_pts=5.0,  max_sl_pts=10.0, lookback=20)
 _SL_INTRADAY = _SlConfig(atr_mult=1.5, min_sl_pts=10.0, max_sl_pts=60.0, lookback=40)
-_TP_SCALPING = _TpConfig(tp1_rr=1.0, tp2_rr=1.6, tp3_rr=2.6, tp1_atr_mult=1.0)
+# Scalping: ladder proporsional SL 0.7/1.0/1.3R (vs intraday 1.5/2.5/4.0R) — TP lebih sering tersentuh.
+_TP_SCALPING = _TpConfig(tp1_rr=0.7, tp2_rr=1.0, tp3_rr=1.3, tp1_atr_mult=0.0)
 _TP_INTRADAY = _TpConfig(tp1_rr=1.5, tp2_rr=2.5, tp3_rr=4.0)
 
 # Entry zone fraction — 0.3×ATR dari close
 _EZ_FRAC = 0.3
-# Structural SL buffer — 0.5×ATR di luar swing point
-# Dinaikkan dari 0.3 → 0.5 untuk menghindari zona stop-hunt di sekitar swing level
+# Structural SL buffer — 0.5×ATR di luar swing point (naik dari 0.3, anti zona stop-hunt)
 _STRUCT_BUFFER_FRAC = 0.5
 
 
@@ -69,7 +52,7 @@ def get_tp_config(is_scalping: bool) -> _TpConfig:
     return _TP_SCALPING if is_scalping else _TP_INTRADAY
 
 
-# ── Data class ────────────────────────────────────────────────────────────────
+# Data class
 
 @dataclass
 class SLTPlan:
@@ -89,7 +72,7 @@ class SLTPlan:
     obstacle_tp1: float = field(default=0.0)
 
 
-# ── Helpers ───────────────────────────────────────────────────────────────────
+# Helpers
 
 def _valid(*values: float) -> bool:
     return all(math.isfinite(v) and v > 0 for v in values)
@@ -255,7 +238,7 @@ def _build_plan(
     )
 
 
-# ── Fungsi utama ──────────────────────────────────────────────────────────────
+# Fungsi utama
 
 def calc_sltp(
     direction:   str,
@@ -272,19 +255,10 @@ def calc_sltp(
     tp1_atr_mult_override: float = 0.0,  # >0 → TP1 = ATR-based (wire dari .env, scalping)
     **_kwargs,
 ) -> "SLTPlan | None":
-    """Hitung SL/TP: coba structural SL dulu, fallback ke ATR flat.
+    """Hitung SL/TP: structural SL (swing ± 0.5×ATR) dulu, fallback atr_mult×ATR.
 
-    Alur:
-      1. Jika df tersedia → cari pivot swing terdekat (_swing_sl).
-         SL = swing_point ± buffer (0.5×ATR) — melewati zona stop-hunt.
-      2. Jika swing tidak ditemukan / terlalu jauh → fallback ke atr_mult×ATR
-         (1.2× untuk scalping, 1.5× untuk intraday — sesuai _SL_SCALPING/_SL_INTRADAY).
-
-    Double-clamp fix (tuntas):
-      safe_cap = hard_cap - ez  (murni, tanpa max() dengan min_sl_pts)
-      Jika safe_cap < min_sl_pts → return None (reject sinyal, bukan paksa cap)
-      Semua clamp & validasi pakai safe_cap, bukan hard_cap mentah.
-      Invariant terjamin: sl_dist + ez <= hard_cap di semua kondisi termasuk ATR tinggi.
+    safe_cap = hard_cap - ez (murni, bukan max() dgn min_sl_pts); jika < min_sl_pts
+    → reject. Invariant: sl_dist + ez <= hard_cap di semua kondisi termasuk ATR tinggi.
     """
     try:
         p, a = float(price_now), float(atr)
@@ -297,59 +271,55 @@ def calc_sltp(
     sl_cfg = get_sl_config(is_scalping)
     tp_cfg = get_tp_config(is_scalping)
 
-    # Override atr_mult jika disuplai dari luar (misal scalping_sl_atr_mult dari .env)
-    # Pola identik dengan tp1_rr override: >0 berarti pakai nilai eksternal
+    # Override atr_mult dari luar (wire .env): >0 = pakai nilai eksternal.
     eff_atr_mult = sl_atr_mult_override if sl_atr_mult_override > 0 else sl_cfg.atr_mult
 
     r1 = tp1_rr if tp1_rr > 0 else tp_cfg.tp1_rr
     r2 = tp2_rr if tp2_rr > 0 else tp_cfg.tp2_rr
     r3 = tp3_rr if tp3_rr > 0 else tp_cfg.tp3_rr
 
-    # Override dari .env menang; fallback ke config TF.
     eff_tp1_atr = tp1_atr_mult_override if tp1_atr_mult_override > 0 else tp_cfg.tp1_atr_mult
 
     hard_cap = max_sl if max_sl > 0 else (max_sl_points if max_sl_points > 0 else sl_cfg.max_sl_pts)
     ez       = _EZ_FRAC * a
     buffer   = _STRUCT_BUFFER_FRAC * a
 
-    # safe_cap = ruang bersih untuk sl_dist setelah entry zone diperhitungkan.
-    # Invariant yang harus dijaga: sl_dist + ez <= hard_cap  →  sl_dist <= hard_cap - ez
-    #
-    # Dua constraint beda arah — tidak bisa di-max() bersama:
-    #   hard_cap - ez  : batas ATAS (jangan lebih dari ini)
-    #   sl_cfg.min_sl_pts : batas BAWAH (jangan kurang dari ini)
-    # Kalau batas bawah > batas atas, tidak ada SL valid yang muat → reject sinyal.
-    # (PRD §20: sinyal sebaiknya ditolak daripada SL dipotong secara paksa.)
-    safe_cap = hard_cap - ez
+    # Scalping: SL cap 10pt dari entry reference; floor 0.8×ATR mencegah terlalu rapat (anti stop-hunt).
+    if is_scalping:
+        hard_cap = min(hard_cap, max(sl_cfg.max_sl_pts, 0.8 * a))
+        safe_cap = hard_cap
+    else:
+        # safe_cap = ruang bersih utk sl_dist setelah entry zone (sl_dist <= hard_cap - ez).
+        # Dua batas beda arah tak bisa di-max(): atas hard_cap-ez, bawah min_sl_pts;
+        # bawah > atas → tidak ada SL valid yang muat → reject.
+        safe_cap = hard_cap - ez
     if safe_cap < sl_cfg.min_sl_pts:
-        # ATR terlalu ekstrem: entry zone sudah "memakan" sebagian besar hard_cap
-        # sehingga tidak ada ruang yang cukup untuk SL minimum yang valid.
+        # ATR sangat besar: entry zone "memakan" hard_cap, tak ada ruang utk SL minimum valid.
         return None
 
-    # ── Coba structural SL dulu (swing point + buffer) ────────────────────
+    # Coba structural SL dulu (swing point + buffer)
     struct_sl = _swing_sl(d, p, df if df is not None else pd.DataFrame(),
                           buffer, sl_cfg.lookback, safe_cap) if df is not None else None
 
     if struct_sl is not None:
         plan = _build_plan(d, p, a, struct_sl, "swing", r1, r2, r3, df, is_scalping,
                            tp1_atr_mult=eff_tp1_atr)
-        # Validasi pakai safe_cap — sl_dist_actual (= ez + sl_dist) dijamin <= hard_cap
-        # ── ATR-relative cap khusus scalping ──────────────────────────────
-        # Swing SL yang valid secara struktural bisa tetap terlalu jauh relatif
-        # terhadap ATR saat ini (misal: pivot ditemukan 10 poin dari harga, tapi
-        # ATR hanya 5 → SL = 2× ATR, TP1 menjadi 2.8× ATR = sulit dicapai scalping).
-        # Cap: sl_dist <= 1.5× ATR untuk scalping — kalau swing terlalu jauh,
-        # skip ke ATR fallback yang lebih proporsional (1.2× ATR).
-        # Untuk intraday tidak di-cap karena swing struktural memang wajar lebih lebar.
+        # Cap scalping: swing valid secara struktural bisa terlalu jauh relatif ATR (contoh SL=2×ATR)
+        # → sl_dist <= 1.5×ATR; kalau terlalu jauh, skip ke fallback 1.2×ATR. Intraday tak di-cap.
         _atr_cap_ok = (plan.sl_dist <= 1.5 * a) if (is_scalping and plan is not None) else True
         if plan is not None and sl_cfg.min_sl_pts <= plan.sl_dist <= safe_cap and _atr_cap_ok:
             return plan
 
-    # ── Fallback: ATR flat ─────────────────────────────────────────────────
-    # Clamp ke safe_cap yang sudah terjamin >= min_sl_pts (karena return None di atas)
-    sl_dist = eff_atr_mult * a
-    sl_dist = max(sl_dist, sl_cfg.min_sl_pts)
-    sl_dist = min(sl_dist, safe_cap)
+    # Fallback: ATR flat
+    if is_scalping:
+        # Cap scalping dari entry reference (sl_dist di _build_plan sudah termasuk ez) → ruang SL = safe_cap - ez.
+        sl_dist = eff_atr_mult * a
+        sl_dist = min(sl_dist, safe_cap - ez)
+        sl_dist = max(sl_dist, 0.0)
+    else:
+        sl_dist = eff_atr_mult * a
+        sl_dist = max(sl_dist, sl_cfg.min_sl_pts)
+        sl_dist = min(sl_dist, safe_cap)
 
     if sl_dist <= 0:
         return None
@@ -367,7 +337,7 @@ def calc_sltp(
     return None
 
 
-# ── Alias untuk kompatibilitas engine ────────────────────────────────────────
+# Alias untuk kompatibilitas engine
 
 def swing_based_sltp(
     direction:           str,
@@ -385,15 +355,9 @@ def swing_based_sltp(
     tp1_atr_mult_override: float = 0.0,
     **_kwargs,
 ) -> "SLTPlan | None":
-    """SL berbasis pivot struktural (PRD §19: Structural Invalidation + Adaptive ATR Buffer).
-
-    Alur nyata (bukan sekadar alias ATR):
-      1. _swing_sl() mencari pivot high/low terdekat dalam df.
-      2. SL = swing_point ± 0.5×ATR (buffer anti stop-hunt).
-      3. Jika tidak ada pivot valid → fallback ke atr_mult×ATR:
-           scalping  : 1.2×ATR  (default _SL_SCALPING.atr_mult, override via sl_atr_mult_override)
-           intraday  : 1.5×ATR  (default _SL_INTRADAY.atr_mult, override via sl_atr_mult_override)
-    df wajib diisi — tanpa df, pivot lookup tidak jalan dan langsung fallback ATR.
+    """SL pivot struktural (PRD §19): _swing_sl → swing ± 0.5×ATR; tanpa pivot valid,
+    fallback atr_mult×ATR (scalping 1.2×, intraday 1.5×, override via sl_atr_mult_override).
+    df wajib — tanpa df langsung fallback ATR.
     """
     return calc_sltp(
         direction=direction, price_now=price_now, atr=atr,

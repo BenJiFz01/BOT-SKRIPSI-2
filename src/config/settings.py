@@ -74,17 +74,13 @@ class Settings:
     cooldown_bars:        int
     atr_min_pct:          float
 
-    # Market Transition (ADX) gate — rileks tapi tetap menyaring
-    # ADX < block  → continuation diblokir (tren terlalu lemah)
-    # ADX < gray   → zona abu-abu, confluence +1 (soft, bukan block)
+    # Market Transition (ADX) gate — ADX < block → continuation diblokir;
+    # ADX < gray → confluence +1 (soft, bukan block)
     market_transition_adx_block: float
     market_transition_adx_gray:  float
 
-    # HTF bias vote — diukur dari data historis (2026-09-17):
-    # - Scalping: H4 tidak menolong WR (72% saat H4 netral vs 60% saat H4 ikut
-    #   setuju) → vote cukup H1 saja = lebih rileks & tak ketinggalan momentum.
-    # - Intraday: top-down penuh, H4/top harus si D1 (D1 kini hidup), supaya
-    #   sinyal searah tren besar tanpa menaikkan threshold skor.
+    # HTF bias vote — dari data historis (2026-09-17): scalping cukup vote H1
+    # (H4 tak menolong WR); intraday wajib D1 sebagai top-down penuh.
     scalping_h1_only:     bool
     intraday_require_d1:  bool
 
@@ -129,12 +125,19 @@ class Settings:
     scalping_tp1_rr:               float
     scalping_tp2_rr:               float
     scalping_tp3_rr:               float
-    scalping_tp1_atr_mult:         float  # TP1 scalping = kelipatan ATR (independen SL)
+    scalping_tp1_atr_mult:         float  # >0 → TP1 scalping = kelipatan ATR (off → ladder RR)
     scalping_min_rr:               float
-    # Min RR terpisah untuk scalping counter-trend (berlawanan HTF)
-    # Mencegah: scalping CT pakai counter_trend_min_rr intraday (1.1)
-    # yang lebih tinggi dari scalping_tp1_rr (1.0) → selalu reject
+    # Min RR terpisah agar scalping CT tak memakai min_rr intraday (1.1)
+    # yang lebih tinggi dari tp1_rr (0.7) → selalu reject
     scalping_counter_trend_min_rr: float
+    scalping_overextend_atr_mult:  float  # guard anti-chase: enter terlalu jauh dari EMA20 % ATR
+    scalping_pullback_enabled:     bool   # mode pullback/rebound scalping (opsional, tambahan)
+    # Konfluensi scalping entry-timing — default logging-only; aktifkan hanya setelah validasi akurasi.
+    scalping_sweep_enabled:        bool   # liquidity sweep ikut skor scalping
+    scalping_fvg_enabled:          bool   # FVG ikut skor scalping
+    # Market State Detector (2026-09-24) — adaptasi logic terhadap kondisi pasar.
+    momentum_ema200_tolerance:     float  # jalur momentum: lebar band EMA200 (×ATR)
+    range_rejection_enabled:       bool   # RANGE lane: rejection di level kunci
 
 
 def load_settings() -> Settings:
@@ -167,8 +170,7 @@ def load_settings() -> Settings:
         cooldown_bars        = _geti("COOLDOWN_BARS",         3),
         atr_min_pct          = _getf("ATR_MIN_PCT",           0.0006),
 
-        # Rileks dari 18/23: 15/25 — jangan blokir awal tren (ADX rendah
-        # = tren baru mulai = momen momentum tertangkap).
+        # Rileks dari 18/23 → 15/25: jangan blokir awal tren (ADX rendah = tren baru mulai).
         market_transition_adx_block = _getf("MARKET_TRANSITION_ADX_BLOCK", 15.0),
         market_transition_adx_gray  = _getf("MARKET_TRANSITION_ADX_GRAY",  25.0),
 
@@ -205,17 +207,29 @@ def load_settings() -> Settings:
 
         scalping_min_trigger_score    = _geti("SCALPING_MIN_TRIGGER_SCORE",    3),
         scalping_min_confluence_score = _geti("SCALPING_MIN_CONFLUENCE_SCORE", 2),
-        scalping_atr_min_points       = _getf("SCALPING_ATR_MIN_POINTS",       5.0),
+        # 2026-09-24 dilihat dr data: ATR gate 5.0pt memblokir 50-75% candle M5
+        # di hari tenang (sinyal mati). Diturunkan ke 3.0 — relatif atr_min_pct
+        # (0.0006×harga ≈ 2.6pt) tetap efektif utk menolak pasar ultra-flat.
+        scalping_atr_min_points       = _getf("SCALPING_ATR_MIN_POINTS",       3.0),
         scalping_sl_atr_mult          = _getf("SCALPING_SL_ATR_MULT",          1.2),
         scalping_cooldown_bars        = _geti("SCALPING_COOLDOWN_BARS",        5),
-        scalping_cooldown_bars_m5     = _geti("SCALPING_COOLDOWN_BARS_M5",     9),
+        # M5 lockout 9 bar (45mnt) terbukti jadi reject #1 akumulasi (19.9%) —
+        # diturunkan ke 6 bar (30 mnt) utk perbaiki responsivitas scalping.
+        scalping_cooldown_bars_m5     = _geti("SCALPING_COOLDOWN_BARS_M5",     6),
         scalping_cooldown_bars_m15    = _geti("SCALPING_COOLDOWN_BARS_M15",    5),
-scalping_tp1_rr               = _getf("SCALPING_TP1_RR",               1.0),
-scalping_tp2_rr               = _getf("SCALPING_TP2_RR",               1.6),
-scalping_tp3_rr               = _getf("SCALPING_TP3_RR",               2.6),
-scalping_tp1_atr_mult         = _getf("SCALPING_TP1_ATR_MULT",         1.0),
-scalping_min_rr               = _getf("SCALPING_MIN_RR",               1.0),
-        # Gate RR acuan rr_tp2 (runner). SCALPING_MIN_RR wajib <= SCALPING_TP2_RR
-        # supaya runner lolos.
+scalping_tp1_rr               = _getf("SCALPING_TP1_RR",               0.7),
+        scalping_tp2_rr               = _getf("SCALPING_TP2_RR",               1.0),
+        scalping_tp3_rr               = _getf("SCALPING_TP3_RR",               1.3),
+        scalping_tp1_atr_mult         = _getf("SCALPING_TP1_ATR_MULT",         0.0),
+        scalping_min_rr               = _getf("SCALPING_MIN_RR",               1.0),
+        # Gate RR dicabut (TP proporsional SL → rr tetap); penggantinya: OVEREXTENSION
+        # guard (anti-chase) di engine + cap SL 10pt.
         scalping_counter_trend_min_rr = _getf("SCALPING_COUNTER_TREND_MIN_RR", 1.5),
+        scalping_overextend_atr_mult  = _getf("SCALPING_OVEREXTEND_ATR_MULT",  1.2),
+        scalping_pullback_enabled     = _getb("SCALPING_PULLBACK_ENABLED",     False),
+        scalping_sweep_enabled        = _getb("SCALPING_LIQUIDITY_SWEEP_ENABLED", False),
+        scalping_fvg_enabled          = _getb("SCALPING_FVG_ENABLED",            False),
+        # Market State Detector (2026-09-24)
+        momentum_ema200_tolerance     = _getf("MOMENTUM_EMA200_TOLERANCE",       1.0),
+        range_rejection_enabled       = _getb("RANGE_REJECTION_ENABLED",         True),
     )
