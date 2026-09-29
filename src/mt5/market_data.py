@@ -1,10 +1,12 @@
 ﻿"""market_data.py — Ambil data OHLCV dari MetaTrader 5.
 
 PENTING — MT5 copy_rates mengembalikan timestamp zona waktu SERVER (bukan UTC);
-ofset diambil dari mt5.terminal_info().timezone, override via env MT5_SERVER_UTC_OFFSET_HOURS.
+ofset dideteksi otomatis dari jam tick server vs UTC nyata, override via env
+MT5_SERVER_UTC_OFFSET_HOURS (dalam jam, mis. 3 untuk UTC+3).
 """
 
 import os
+import time
 
 import pandas as pd
 import MetaTrader5 as mt5
@@ -14,8 +16,13 @@ from src.config.settings import TF_MAP
 _OFFSET: int | None = None
 
 
-def _server_utc_offset_seconds() -> int:
-    """Offset zona waktu server MT5 terhadap UTC dalam detik (cache)."""
+def _server_utc_offset_seconds(symbol: str) -> int:
+    """Offset zona waktu server MT5 terhadap UTC dalam detik (cache).
+
+    Prioritas: env MT5_SERVER_UTC_OFFSET_HOURS, lalu estimasi dari selisih
+    mt5.symbol_info_tick().time (unix server) dengan time.time() (unix UTC),
+    dibulatkan ke kelipatan 30 menit agar mengakomodasi zona :30.
+    """
     global _OFFSET
     if _OFFSET is not None:
         return _OFFSET
@@ -29,10 +36,15 @@ def _server_utc_offset_seconds() -> int:
             pass
 
     try:
-        info = mt5.terminal_info()
-        _OFFSET = int(getattr(info, "timezone", 0)) if info else 0
+        tick = mt5.symbol_info_tick(symbol)
+        if tick is not None and getattr(tick, "time", 0):
+            diff = int(tick.time) - int(time.time())
+            # Server timezone hampir selalu kelipatan 30 menit; buang jitter/latensi tick.
+            _OFFSET = round(diff / 1800) * 1800
+            return _OFFSET
     except Exception:
-        _OFFSET = 0
+        pass
+    _OFFSET = 0
     return _OFFSET
 
 
@@ -49,7 +61,7 @@ def fetch_ohlc(symbol: str, tf: str, n_bars: int = 500) -> pd.DataFrame:
         raise RuntimeError(f"Tidak ada data MT5 untuk {symbol} {tf}: {mt5.last_error()}")
     df = pd.DataFrame(rates)
     df["time"] = pd.to_datetime(df["time"], unit="s")
-    offset = _server_utc_offset_seconds()
+    offset = _server_utc_offset_seconds(symbol)
     if offset:
         df["time"] = df["time"] - pd.to_timedelta(offset, unit="s")
     return df

@@ -22,7 +22,7 @@ class _TFConfig:
     min_strength:  int
 
 
-# min_strength=20 konsisten dengan _touch_score(): 2 touch=20, 3 touch=35, 4+ touch=50
+# min_strength=20 konsisten dengan _touch_score(): 2 touch=20, 3 touch=35, 4+ touch=25 (exhaustion)
 _TF_CONFIG: dict[str, _TFConfig] = {
     "M15": _TFConfig(pivot_length=3, lookback=300, atr_tolerance=0.50, min_touches=2, min_strength=20),
     "H1":  _TFConfig(pivot_length=4, lookback=400, atr_tolerance=0.60, min_touches=2, min_strength=20),
@@ -82,7 +82,7 @@ def _cluster_with_idx(
 
 
 def _touch_score(touches: int) -> float:
-    if touches >= 4: return 50.0
+    if touches >= 4: return 25.0
     if touches == 3: return 35.0
     if touches == 2: return 20.0
     return 0.0
@@ -267,12 +267,17 @@ def snr_confluence_score(
     near_thr_fresh = near_factor * atr
     near_thr_aged  = (near_factor + 0.3) * atr   # lebih longgar untuk level lama yang lebih "mayor"
 
+    # Fix 3: level harus JAUH di sisi entry (masih aktif), bukan sudah "membasar"-nya.
+    # Entry yang nyaris menempel/melampaui level = konfirmasi tidak valid (level rawan pecah).
+    level_margin = 0.15 * atr
     if direction == "BUY":
         same_type = [z for z in zones
-                     if z.zone_type == "SUPPORT" and z.center <= entry_price]
+                     if z.zone_type == "SUPPORT"
+                     and z.center <= entry_price - level_margin]
     else:
         same_type = [z for z in zones
-                     if z.zone_type == "RESISTANCE" and z.center >= entry_price]
+                     if z.zone_type == "RESISTANCE"
+                     and z.center >= entry_price + level_margin]
 
     if not same_type:
         all_same = [z for z in zones

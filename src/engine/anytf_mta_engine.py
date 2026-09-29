@@ -299,13 +299,27 @@ def evaluate_any_tf_mta(
             _reject(df_t, f"BIAS_FAIL({bias_detail}) state={market_state}({state_note})")
             return None
 
-    # Late-entry: tolak harga terlalu jauh dari trigger candle (>1.5×ATR) — entry chasing
-    # SL rawan kena retracement. Real-time (dist=0) otomatis lolos.
-    _trig_close = float(df_t.iloc[-2]["close"]) if len(df_t) >= 2 else price_now
-    _late_dist  = abs(price_now - _trig_close)
-    _late_max   = 1.5 * atr
-    if _late_dist > _late_max:
-        _reject(df_t, f"LATE_ENTRY(dist={_late_dist:.2f}/max={_late_max:.2f})"); return None
+    # Anti-chase (fix 1 + fix 4): tolak bila harga sudah menyimpang DARI setup candle
+    # cukup untuk membuat zona entry tidak valid lagi. _chase diukur searah target
+    # (SELL: setup turun, BUY: setup naik) — lonjakan 1-2 candle terdeteksi, real-time
+    # (dist≈0) otomatis lolos. Guard sisi berlawanan (breakout): harga lewat zona atas/bawah.
+    _setup_ohlc = df_t.iloc[-2] if len(df_t) >= 2 else df_t.iloc[-1]
+    _set_close  = float(_setup_ohlc["close"])
+    _set_hi     = float(_setup_ohlc["high"])
+    _set_lo     = float(_setup_ohlc["low"])
+    _ez_half    = 0.3 * atr   # setengah lebar zona entry (sama dgn _EZ_FRAC di sl_tp)
+    _ez_top     = _set_hi + _ez_half
+    _ez_bot     = _set_lo - _ez_half
+    _chase      = (_set_close - price_now) if direction == "SELL" else (price_now - _set_close)
+    _chase_max  = 1.5 * atr
+    if _chase > _chase_max:
+        _reject(df_t, f"LATE_ENTRY(chase={_chase:.2f}/max={_chase_max:.2f})"); return None
+    # Skip-rule jadi gate: SELL tak valid bila harga sudah di atas zona (breakout),
+    # BUY tak valid bila harga sudah di bawah zona.
+    if direction == "SELL" and price_now > _ez_top:
+        _reject(df_t, f"ZONE_PASSED(price={price_now:.2f}>top={_ez_top:.2f})"); return None
+    if direction == "BUY" and price_now < _ez_bot:
+        _reject(df_t, f"ZONE_PASSED(price={price_now:.2f}<bot={_ez_bot:.2f})"); return None
 
     # GATE 4 — SL/TP
     # RR berbeda untuk scalping (ambil profit cepat) vs intraday
