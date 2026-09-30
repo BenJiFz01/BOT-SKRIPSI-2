@@ -25,7 +25,7 @@ from src.engine.confluence import _confluence_score, _is_counter_trend_valid
 from src.engine.setup_plan import scan_setup_plan
 from src.engine.state import _decisive_adx, _ltf_counter_veto, _market_state, detect_market_condition
 from src.engine.structure import structure_holds, structure_trend_start
-from src.engine.trigger import _has_key_level, _range_rejection_setup, _scalp_pullback_setup, _trigger_score
+from src.engine.trigger import _has_key_level, _has_quality_key_level, _range_rejection_setup, _scalp_pullback_setup, _trigger_score
 from src.engine.utils import _atr_proxy, _latest_closed, _reject, calc_rr
 from src.features.entry_setup import classify_entry_setup
 from src.features.session import is_active_session, session_name, session_strictness
@@ -89,6 +89,7 @@ def evaluate_any_tf_mta(
     flip_require_key_level:        bool             = True,  # FLIP wajib key level
     h1_require_key_level:          bool             = True,  # H1 wajib key level
     scalping_pullback_min_trigger: int              = 2,     # floor trigger jalur PULLBACK
+    range_quality_key_level:       bool             = True,  # RANGE/sideways: continuation wajib level berkualitas
 ) -> Signal | None:
     """Evaluasi sinyal untuk satu (symbol, trigger_tf). Returns Signal jika 5 gate lulus."""
     trigger_tf  = trigger_tf.upper()
@@ -438,6 +439,17 @@ def evaluate_any_tf_mta(
     if _flip_active and flip_require_key_level and not _has_key_level(conf_notes):
         _reject(df_t, f"FLIP_NO_KEY_LEVEL[{conf_notes}]")
         return None
+
+    # Quality key-level gate (2026-09-30): di pasar RANGE/CLEAN atau cond sideways,
+    # jalur continuation/momentum wajib level BERKUALITAS — SnR 3-touch (SnR_MED/SnR+)
+    # atau FIB_GOLDEN. SnR_WEAK (2-touch) tak dihitung: kasus loss 30/09 12:00 BUY 5/6
+    # di RANGE dgn SnR_WEAK disapu 15m padahal arah benar; semua WIN hari itu punya
+    # SnR 3-touch + FIB_GOLDEN. Pullback/range/flip/CT punya gerbang sendiri → tak diapply.
+    if range_quality_key_level and not (_pb_active or _range_active or _flip_active or _is_counter):
+        if market_state in ("RANGE", "CLEAN") or market_cond == "sideways":
+            if not _has_quality_key_level(conf_notes):
+                _reject(df_t, f"RANGE_QUALITY_NO_KEY_LEVEL[{conf_notes}]")
+                return None
 
     entry_for_rr = plan.entry_high if direction == "BUY" else plan.entry_low
     rr            = calc_rr(direction, entry_for_rr, plan.sl, plan.tp1)

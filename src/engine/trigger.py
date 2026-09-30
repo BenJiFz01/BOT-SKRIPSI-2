@@ -244,6 +244,15 @@ def _has_key_level(conf_notes: str) -> bool:
     return any(k in conf_notes for k in ("SnR+", "SnR_WEAK", "SnR_MED", "SnD+"))
 
 
+def _has_quality_key_level(conf_notes: str) -> bool:
+    """True jika ada key level BERKUALITAS: SnR 3-touch+ (SnR_MED/SnR+) atau FIB_GOLDEN.
+
+    SnR_WEAK (2-touch, akurasi historis ~31.6%) TIDAK dihitung — level lemah adalah
+    kandidat stop-hunt (kasus loss 30/09 12:00: BUY 5/6 di RANGE dgn SnR_WEAK, SL
+    disapu lalu harga lanjut naik; semua WIN hari itu punya SnR 3-touch + FIB_GOLDEN)."""
+    return any(k in conf_notes for k in ("SnR_MED", "SnR+", "FIB_GOLDEN"))
+
+
 def _get_active_patterns(direction: str, last_row: pd.Series) -> list[str]:
     from src.features.patterns import PATTERN_FUNCS
     names: list[str] = []

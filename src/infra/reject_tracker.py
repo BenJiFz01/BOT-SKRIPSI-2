@@ -63,6 +63,7 @@ _CATEGORY: dict[str, str] = {
     "DAILY_LIMIT_SCALPING":  "DAILY_LIMIT",
     "DAILY_LIMIT_INTRADAY":  "DAILY_LIMIT",
     "MARKET_TRANSITION":  "MARKET_TRANSITION",
+    "RANGE_QUALITY_NO_KEY_LEVEL": "RANGE_QUALITY",
 }
 
 # Hint tuning per kategori dominan
@@ -140,6 +141,12 @@ _HINT: dict[str, str] = {
         "(MARKET_TRANSITION_ADX_BLOCK, default 15). "
         "Sistem menunda Continuation signal sesuai PRD 'Range/Transition → NO SIGNAL'. "
         "Jika terlalu sering, turunkan ambang block atau cek apakah D1 sudah beri bias."
+    ),
+    "RANGE_QUALITY": (
+        "Pasar RANGE/sideways tanpa key level berkualitas (SnR 3-touch / FIB_GOLDEN) pada "
+        "jalur continuation — level 2-touch (SnR_WEAK) tak dihitung karena rawan stop-hunt. "
+        "Kasus 30/09 12:00 LOSS dengan SnR_WEAK; semua WIN hari itu punya level 3-touch. "
+        "Tuning: RANGE_QUALITY_KEY_LEVEL=false untuk melonggari."
     ),
 }
 

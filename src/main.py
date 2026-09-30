@@ -210,7 +210,8 @@ def main() -> None:
         f"PARAMS GATES | VETO+FLIP={'ON' if s.ltf_veto_enabled else 'OFF'} "
         f"flip_trig>={s.flip_min_trigger} FLIP_key={'ON' if s.flip_require_key_level else 'OFF'} "
         f"H1_key={'ON' if s.h1_require_key_level else 'OFF'} "
-        f"PB_floor={s.scalping_pullback_min_trigger}"
+        f"PB_floor={s.scalping_pullback_min_trigger} "
+        f"RangeQual_key={'ON' if s.range_quality_key_level else 'OFF'}"
     )
 
     sig_logger     = SignalLogger()
@@ -352,6 +353,7 @@ def main() -> None:
                             flip_require_key_level       = s.flip_require_key_level,
                             h1_require_key_level         = s.h1_require_key_level,
                             scalping_pullback_min_trigger= s.scalping_pullback_min_trigger,
+                            range_quality_key_level       = s.range_quality_key_level,
                         )
                     except Exception as eval_err:
 # Exception satu TF/candle jangan mematikan seluruh bot — log, skip, lanjut.

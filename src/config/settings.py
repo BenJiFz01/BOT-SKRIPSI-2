@@ -145,6 +145,7 @@ class Settings:
     flip_require_key_level:        bool   # FLIP wajib key level (SnR/SnD)
     h1_require_key_level:          bool   # H1 wajib key level
     scalping_pullback_min_trigger: int    # floor trigger jalur PULLBACK (default 2)
+    range_quality_key_level:       bool   # RANGE/sideways: continuation wajib key level berkualitas
 
 
 def load_settings() -> Settings:
@@ -245,4 +246,5 @@ scalping_tp1_rr               = _getf("SCALPING_TP1_RR",               0.7),
         flip_require_key_level        = _getb("FLIP_REQUIRE_KEY_LEVEL",          True),
         h1_require_key_level          = _getb("H1_REQUIRE_KEY_LEVEL",            True),
         scalping_pullback_min_trigger = _geti("SCALPING_PULLBACK_MIN_TRIGGER",    2),
+        range_quality_key_level       = _getb("RANGE_QUALITY_KEY_LEVEL",          True),
     )
