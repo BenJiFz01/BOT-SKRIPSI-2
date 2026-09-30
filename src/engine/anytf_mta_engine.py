@@ -23,7 +23,8 @@ from src.engine.cooldown import (
 )
 from src.engine.confluence import _confluence_score, _is_counter_trend_valid
 from src.engine.setup_plan import scan_setup_plan
-from src.engine.state import _decisive_adx, _market_state, detect_market_condition
+from src.engine.state import _decisive_adx, _ltf_counter_veto, _market_state, detect_market_condition
+from src.engine.structure import structure_holds, structure_trend_start
 from src.engine.trigger import _has_key_level, _range_rejection_setup, _scalp_pullback_setup, _trigger_score
 from src.engine.utils import _atr_proxy, _latest_closed, _reject, calc_rr
 from src.features.entry_setup import classify_entry_setup
@@ -82,6 +83,12 @@ def evaluate_any_tf_mta(
     market_transition_adx_gray:    float            = 25.0,
     scalping_h1_only:              bool             = True,
     intraday_require_d1:           bool             = True,
+    # Tuas keketatan/reaksi (A/B testing tanpa ubah kode).
+    ltf_veto_enabled:              bool             = True,  # VETO + FLIP lane menyala
+    flip_min_trigger:              int              = 3,     # FLIP wajib trigger >= ini
+    flip_require_key_level:        bool             = True,  # FLIP wajib key level
+    h1_require_key_level:          bool             = True,  # H1 wajib key level
+    scalping_pullback_min_trigger: int              = 2,     # floor trigger jalur PULLBACK
 ) -> Signal | None:
     """Evaluasi sinyal untuk satu (symbol, trigger_tf). Returns Signal jika 5 gate lulus."""
     trigger_tf  = trigger_tf.upper()
@@ -171,6 +178,12 @@ def evaluate_any_tf_mta(
         eff_trig += 1
         eff_conf += 1
 
+    # H1 hardening: rekam 29th WR 19% + loss gantung 6-10 jam — bar H1 dinaikkan
+    # +1 trigger & +1 confluence (sebelum cap), key level diwajibkan di GATE 5.
+    if trigger_tf == "H1":
+        eff_trig += 1
+        eff_conf += 1
+
     # Cap: sideways(+1) dan asian(+1) bisa numpuk — tanpa cap butuh semua komponen
     # sepakat (nyaris mustahil). Trig cap 5, conf cap 4.
     eff_trig = min(eff_trig, 5)
@@ -193,6 +206,7 @@ def evaluate_any_tf_mta(
     trig_score:   int        = 0
     trig_notes:   str        = ""
     _is_counter:  bool       = False
+    _flip_active: bool       = False
     _pb_active:   bool       = False
     _mom_active:  bool       = False
     _range_active: bool      = False
@@ -221,10 +235,15 @@ def evaluate_any_tf_mta(
             # Jalur 2 — PULLBACK (retrace 23-78.6% dlm tren kuat), diprioritaskan sebelum
             # momentum — hanya tanpa pullback, berlanjut ke jalur momentum.
             _pb_ok, _pb_note = _scalp_pullback_setup(df_t, dir_try, atr)
-            if _pb_ok:
-                direction, trig_score, trig_notes = dir_try, 0, f"PULLBACK[{_pb_note}]"
+            # Pullback floor: setup tanpa trigger minimal (kasus 0/6 lolos 29th) tak
+            # boleh emit — gagal floor jatuh ke jalur momentum seperti pullback gagal.
+            _pb_tok, _pb_tsc, _pb_tnt = _trigger_score(df_t, dir_try, min_score=scalping_pullback_min_trigger)
+            if _pb_ok and _pb_tok:
+                direction, trig_score, trig_notes = dir_try, _pb_tsc, f"PULLBACK[{_pb_note}]"
                 _pb_active = True
             else:
+                if _pb_ok:
+                    _pb_note = f"{_pb_note}+TRIGWEAK({_pb_tnt})"
                 # Jalur 3 — MOMENTUM/BREAKOUT (tren kuat TANPA pullback → harga tak
                 # kembali ke EMA200): gate EMA200 dilonggarkan via MOMENTUM_EMA200_TOLERANCE.
                 if market_state in ("HIGH_MOMENTUM", "TREND_BULL", "TREND_BEAR", "BREAKOUT"):
@@ -298,6 +317,34 @@ def evaluate_any_tf_mta(
         else:
             _reject(df_t, f"BIAS_FAIL({bias_detail}) state={market_state}({state_note})")
             return None
+
+    # LTF veto + flip lane (simetris dua arah). Veto defensif: blokir sinyal searah
+    # bias HTF saat kaki momentum LTF berlawanan masih utuh (kasus 29th: H1 BEAR +
+    # rally M5/M15 → SELL diblokir). Anti-flicker: kalau momentum patah tapi struktur
+    # swing lawan (higher-low/lower-high) belum patah, veto tetap aktif.
+    # Flip ofensif: arah berlawanan dievaluasi dgn gate ketat (trigger ≥3, atau ≥2 bila
+    # ada struktur awal tren: swing/base break) + key level di GATE 5; gagal = reject.
+    # Hanya lane continuation/momentum — pullback/range/CT punya logika sendiri.
+    if direction in ("BUY", "SELL") and not (_pb_active or _range_active or _is_counter) and ltf_veto_enabled:
+        _opp = "BUY" if direction == "SELL" else "SELL"
+        _vetoed, _veto_note = _ltf_counter_veto(df_t, direction, atr)
+        if not _vetoed:
+            _hold, _hold_note = structure_holds(df_t, _opp)
+            if _hold:
+                _vetoed = True
+                _veto_note = f"STRUCT_HOLD({_hold_note})"
+        if _vetoed:
+            _fok, _fsc, _fnt = _trigger_score(df_t, _opp, min_score=2)
+            _v2, _v2_note = _ltf_counter_veto(df_t, _opp, atr)
+            _tstart, _ts_note = structure_trend_start(df_t, _opp, atr)
+            if (_fsc >= flip_min_trigger or (_fsc >= 2 and _tstart)) and not _v2:
+                direction, trig_score, trig_notes = _opp, _fsc, f"FLIP[{_fnt}] {_veto_note}"
+                if _ts_note:
+                    trig_notes += f" STR[{_ts_note}]"
+                _flip_active = True
+            else:
+                _reject(df_t, f"{_veto_note} flip_fail[trig={_fsc} str={_ts_note or '-'} {_v2_note}]")
+                return None
 
     # Anti-chase (fix 1 + fix 4): tolak bila harga sudah menyimpang DARI setup candle
     # cukup untuk membuat zona entry tidak valid lagi. _chase diukur searah target
@@ -380,6 +427,18 @@ def evaluate_any_tf_mta(
         _reject(df_t, f"RANGE_NO_KEY_LEVEL[{conf_notes}]")
         return None
 
+    # H1 hardening: rekam WR 19% + loss gantung 6-10 jam (29th: 3/3 LOSS, semua SNR_FAR).
+    # Trigger H1 menahan posisi berjam-jam — tanpa key level = NO SIGNAL.
+    if trigger_tf == "H1" and h1_require_key_level and not _has_key_level(conf_notes):
+        _reject(df_t, f"H1_NO_KEY_LEVEL[{conf_notes}]")
+        return None
+
+    # Flip lane wajib punya key level — entry melawan bias HTF hanya valid di level,
+    # bukan di tengah jalan (kontrol risiko ofensif; data reversal mentah WR 18%).
+    if _flip_active and flip_require_key_level and not _has_key_level(conf_notes):
+        _reject(df_t, f"FLIP_NO_KEY_LEVEL[{conf_notes}]")
+        return None
+
     entry_for_rr = plan.entry_high if direction == "BUY" else plan.entry_low
     rr            = calc_rr(direction, entry_for_rr, plan.sl, plan.tp1)
     rr_tp2_actual = calc_rr(direction, entry_for_rr, plan.sl, plan.tp2)
@@ -409,8 +468,9 @@ def evaluate_any_tf_mta(
         _state_mode = "BREAKOUT_MOMENTUM" if market_state == "BREAKOUT" else "MOMENTUM"
     elif _range_active:
         _state_mode = "RANGE_REJECT"
-    base_mode = _state_mode or ("PULLBACK" if _pb_active else ("REVERSAL" if _is_counter else "CONTINUATION"))
-    final_mode = setup_mode if setup_mode else base_mode
+    base_mode = "FLIP" if _flip_active else (_state_mode or ("PULLBACK" if _pb_active else ("REVERSAL" if _is_counter else "CONTINUATION")))
+    # FLIP dipaksa menang atas classifier agar terpisah di data (evaluasi butuh label murni).
+    final_mode = base_mode if _flip_active else (setup_mode if setup_mode else base_mode)
     mkt_tag = f" [{market_cond.upper()}/{market_state}]" if market_cond else ""
 
     # [Conflict resolver — anti spam "3 sinyal sekaligus"] dedup LINTAS-TF per (symbol, direction):

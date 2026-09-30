@@ -8,11 +8,14 @@ from openpyxl.styles import Alignment, Font, PatternFill
 from openpyxl.utils import get_column_letter
 
 from src.infra.report.styles import (
-    C_COUNTER, C_HEADER_BLUE, C_HEADER_GOLD, C_LOSS,
+    C_COUNTER, C_FLIP, C_HEADER_BLUE, C_HEADER_GOLD, C_LOSS,
     C_PENDING, C_SUBHEADER, C_WIN,
     auto_border, parse_float, set_cell, write_header_row,
 )
+from src.infra.modes import mode_label, mode_note
 from src.utils.time_utils import iso_to_wib_excel
+
+MODE_BG: dict[str, str] = {"FLIP": C_FLIP, "REVERSAL": C_COUNTER}
 
 
 def sheet_ringkasan(wb, stats: dict, records: list[dict]) -> None:
@@ -88,9 +91,9 @@ def sheet_ringkasan(wb, stats: dict, records: list[dict]) -> None:
 
     by_mode = stats.get("by_mode", {})
     if by_mode:
-        section("D.  TREND vs REVERSAL")
-        for mode, d in by_mode.items():
-            label = "Reversal" if mode == "REVERSAL" else "Trend Following"
+        section("D.  PERFORMA PER MODE")
+        for mode, d in sorted(by_mode.items()):
+            label = mode_label(mode)
             dec   = d["win"] + d["loss"]
             wr    = round(d["win"] / dec * 100, 1) if dec > 0 else 0.0
             data_row(f"{label} — Total",    d["total"])
@@ -99,6 +102,7 @@ def sheet_ringkasan(wb, stats: dict, records: list[dict]) -> None:
             r_mwr = data_row(f"{label} — Win Rate", wr / 100, pct=True)
             ws.cell(row=r_mwr, column=3).number_format = "0.0%"
             ws.cell(row=r_mwr, column=3).value = wr / 100
+            ws.cell(row=r_mwr, column=3).fill = PatternFill("solid", fgColor=MODE_BG.get(mode, C_SUBHEADER))
         blank()
 
     auto_border(ws, 4, 2, r - 1, 3)
@@ -113,7 +117,7 @@ def sheet_ringkasan(wb, stats: dict, records: list[dict]) -> None:
         ("Semua Sinyal",     "Histori semua sinyal"),
         ("Per Timeframe",    "Win rate per TF"),
         ("Per Arah",         "BUY vs SELL"),
-        ("Trend vs Counter", "Trend Following vs Counter"),
+        ("Per Mode",         "Win rate per mode sinyal"),
         ("Akurasi Komponen", "Akurasi tiap indikator"),
         ("Equity Curve",     "Grafik kumulatif WIN/LOSS"),
     ]:
@@ -132,7 +136,8 @@ def sheet_ringkasan(wb, stats: dict, records: list[dict]) -> None:
     nav_r += 1
     for label, color in [
         ("WIN (TP1/TP2/TP3)", C_WIN), ("LOSS", C_LOSS),
-        ("PENDING", C_PENDING), ("Counter Trend", C_COUNTER),
+        ("PENDING", C_PENDING), ("Counter Trend (Reversal)", C_COUNTER),
+        ("FLIP (Awal Tren LTF)", C_FLIP),
     ]:
         set_cell(ws, nav_r, 5, f"  {label}", bg=color)
         ws.merge_cells(f"E{nav_r}:F{nav_r}")
@@ -207,9 +212,9 @@ def sheet_semua_sinyal(wb, records: list[dict]) -> None:
         if outcome in ("WIN_TP1", "WIN_TP2", "WIN_TP3"): row_bg = C_WIN
         elif outcome == "LOSS":                            row_bg = C_LOSS
         elif outcome == "PENDING":                         row_bg = C_PENDING
-        else:                                              row_bg = C_COUNTER if rec.get("signal_mode") == "REVERSAL" else None
+        else:                                              row_bg = MODE_BG.get(rec.get("signal_mode", "").upper())
 
-        mode = "Reversal" if rec.get("signal_mode") == "REVERSAL" else "Trend"
+        mode = mode_label(rec.get("signal_mode", ""))
         vals = [
             idx, rec.get("signal_id",""), iso_to_wib_excel(rec.get("timestamp","")),
             rec.get("symbol",""), rec.get("timeframe",""), rec.get("direction",""), mode,
@@ -242,7 +247,8 @@ def sheet_semua_sinyal(wb, records: list[dict]) -> None:
     leg = len(records) + 3
     ws.merge_cells(f"A{leg}:D{leg}")
     set_cell(ws, leg, 1, "Keterangan Warna:", bold=True)
-    for label, color in [("WIN", C_WIN), ("LOSS", C_LOSS), ("PENDING", C_PENDING)]:
+    for label, color in [("WIN", C_WIN), ("LOSS", C_LOSS), ("PENDING", C_PENDING),
+                         ("FLIP", C_FLIP), ("Reversal", C_COUNTER)]:
         leg += 1
         set_cell(ws, leg, 1, f"  {label}", bg=color)
 
@@ -289,21 +295,20 @@ def sheet_per_arah(wb, stats: dict) -> None:
 
 
 def sheet_trend_vs_counter(wb, stats: dict) -> None:
-    ws      = wb.create_sheet("Trend vs Counter")
+    ws      = wb.create_sheet("Per Mode")
     by_mode = stats.get("by_mode", {})
-    set_cell(ws, 1, 1, "TREND FOLLOWING vs COUNTER TREND", bold=True, size=12, bg=C_HEADER_GOLD, fg="FFFFFF")
+    set_cell(ws, 1, 1, "PERFORMA PER MODE SINYAL", bold=True, size=12, bg=C_HEADER_GOLD, fg="FFFFFF")
     ws.merge_cells("A1:G1")
     write_header_row(ws, 2, ["Mode", "Total", "WIN", "LOSS", "Pending", "Win Rate (%)", "Keterangan"])
-    for i, w in enumerate([18,8,8,8,8,14,40], 1):
+    for i, w in enumerate([24,8,8,8,8,14,44], 1):
         ws.column_dimensions[get_column_letter(i)].width = w
     r = 3
-    labels = {"CONTINUATION": "Trend Following", "REVERSAL": "Reversal", "BREAKOUT": "Breakout"}
-    notes  = {"CONTINUATION": "Mengikuti arah HTF bias", "REVERSAL": "Melawan HTF bias", "BREAKOUT": "Breakout momentum"}
-    for mode, d in by_mode.items():
+    for mode, d in sorted(by_mode.items()):
         dec  = d["win"] + d["loss"]
         wr   = round(d["win"] / dec * 100, 1) if dec > 0 else 0.0
-        bg   = C_COUNTER if mode == "REVERSAL" else None
-        for col, val in enumerate([labels.get(mode,mode), d["total"], d["win"], d["loss"], d["pending"], wr, notes.get(mode,"")], 1):
+        bg   = MODE_BG.get(mode, None)
+        for col, val in enumerate([mode_label(mode), d["total"], d["win"], d["loss"],
+                                   d["pending"], wr, mode_note(mode)], 1):
             set_cell(ws, r, col, val, bg=bg)
         r += 1
     auto_border(ws, 1, 1, r - 1, 7)

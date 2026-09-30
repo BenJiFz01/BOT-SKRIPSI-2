@@ -206,6 +206,12 @@ def main() -> None:
         f"trig>={s.scalping_min_trigger_score} conf>={s.scalping_min_confluence_score} "
         f"cooldown M5={s.scalping_cooldown_bars_m5}bar M15={s.scalping_cooldown_bars_m15}bar"
     )
+    logger.info(
+        f"PARAMS GATES | VETO+FLIP={'ON' if s.ltf_veto_enabled else 'OFF'} "
+        f"flip_trig>={s.flip_min_trigger} FLIP_key={'ON' if s.flip_require_key_level else 'OFF'} "
+        f"H1_key={'ON' if s.h1_require_key_level else 'OFF'} "
+        f"PB_floor={s.scalping_pullback_min_trigger}"
+    )
 
     sig_logger     = SignalLogger()
     reject_tracker = RejectTracker(interval_minutes=30)
@@ -341,6 +347,11 @@ def main() -> None:
                             market_transition_adx_gray   = s.market_transition_adx_gray,
                             scalping_h1_only             = s.scalping_h1_only,
                             intraday_require_d1          = s.intraday_require_d1,
+                            ltf_veto_enabled             = s.ltf_veto_enabled,
+                            flip_min_trigger             = s.flip_min_trigger,
+                            flip_require_key_level       = s.flip_require_key_level,
+                            h1_require_key_level         = s.h1_require_key_level,
+                            scalping_pullback_min_trigger= s.scalping_pullback_min_trigger,
                         )
                     except Exception as eval_err:
 # Exception satu TF/candle jangan mematikan seluruh bot — log, skip, lanjut.

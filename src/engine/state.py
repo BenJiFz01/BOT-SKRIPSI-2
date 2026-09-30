@@ -177,3 +177,39 @@ def _market_state(
         return ("TREND_BULL" if direction == "BUY" else "TREND_BEAR", ",".join(notes))
 
     return ("CLEAN", ",".join(notes))
+
+
+def _ltf_counter_veto(
+    df:        pd.DataFrame,
+    direction: str,
+    atr:       float,
+) -> tuple[bool, str]:
+    """Veto defensif simetris: blokir sinyal searah bias HTF saat kaki momentum LTF
+    berlawanan masih UTUH (bukan sekadar 1-2 candle noise).
+
+    SELL di-veto bila kaki bullish utuh: streak bullish ≥2 & impuls ≥1.5×ATR &
+    close masih di atas EMA20. BUY simetris (kaki bearish utuh, close di bawah EMA20).
+    Kaki yang sudah patah (harga kembali di sisi entry) tidak di-veto — top/bottom
+    yang sudah berbalik tetap boleh diambil.
+    """
+    if atr <= 0 or len(df) < 22:
+        return False, ""
+    direction = direction.upper()
+    if direction not in ("BUY", "SELL"):
+        return False, ""
+
+    opp    = "BUY" if direction == "SELL" else "SELL"
+    streak = _momentum_streak(df, opp, atr)
+    imp    = _impulse_atr(df, opp, atr)
+    if streak < 2 or imp < 1.5:
+        return False, ""
+
+    last  = _latest_closed(df)
+    close = _safe(last, "close")
+    ema20 = _safe(last, "ema_20")
+    if close is None or ema20 is None:
+        return False, ""
+    intact = (close > ema20) if direction == "SELL" else (close < ema20)
+    if not intact:
+        return False, ""
+    return True, f"LTF_VETO({opp}_leg streak={streak} imp={imp:.1f})"

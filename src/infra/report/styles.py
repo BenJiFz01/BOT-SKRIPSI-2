@@ -8,6 +8,7 @@ C_WIN         = "E2EFDA"
 C_LOSS        = "FCE4D6"
 C_PENDING     = "FFF2CC"
 C_COUNTER     = "DAE3F3"
+C_FLIP        = "EDE0F2"
 C_SUBHEADER   = "D6E4F0"
 
 

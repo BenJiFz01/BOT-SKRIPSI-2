@@ -139,6 +139,13 @@ class Settings:
     momentum_ema200_tolerance:     float  # jalur momentum: lebar band EMA200 (×ATR)
     range_rejection_enabled:       bool   # RANGE lane: rejection di level kunci
 
+    # === Tuas keketatan/reaksi (A/B testing tanpa ubah kode) ===
+    ltf_veto_enabled:              bool   # master switch jalur VETO + FLIP (LTF berbalik)
+    flip_min_trigger:              int    # FLIP wajib trigger >= nilai ini (3 ketat / 2 longgar+struktur)
+    flip_require_key_level:        bool   # FLIP wajib key level (SnR/SnD)
+    h1_require_key_level:          bool   # H1 wajib key level
+    scalping_pullback_min_trigger: int    # floor trigger jalur PULLBACK (default 2)
+
 
 def load_settings() -> Settings:
     symbols = [s.strip() for s in _get("SYMBOLS", "XAUUSD").split(",") if s.strip()]
@@ -232,4 +239,10 @@ scalping_tp1_rr               = _getf("SCALPING_TP1_RR",               0.7),
         # Market State Detector (2026-09-24)
         momentum_ema200_tolerance     = _getf("MOMENTUM_EMA200_TOLERANCE",       1.0),
         range_rejection_enabled       = _getb("RANGE_REJECTION_ENABLED",         True),
+        # Tuas keketatan/reaksi (A/B testing tanpa ubah kode)
+        ltf_veto_enabled              = _getb("LTF_VETO_ENABLED",                True),
+        flip_min_trigger              = _geti("FLIP_MIN_TRIGGER",                3),
+        flip_require_key_level        = _getb("FLIP_REQUIRE_KEY_LEVEL",          True),
+        h1_require_key_level          = _getb("H1_REQUIRE_KEY_LEVEL",            True),
+        scalping_pullback_min_trigger = _geti("SCALPING_PULLBACK_MIN_TRIGGER",    2),
     )

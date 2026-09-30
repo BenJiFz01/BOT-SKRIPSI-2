@@ -12,6 +12,7 @@ _MODE_TAG: dict[str, str] = {
     "BREAK_RETEST": " ⟨BREAK_RETEST⟩",
     "MOMENTUM":     " ⟨MOMENTUM⟩",
     "PULLBACK":     " ⟨PULLBACK⟩",
+    "FLIP":         " ⟨FLIP⟩",
 }
 
 _MODE_EXPLAIN: dict[str, str] = {
@@ -21,6 +22,7 @@ _MODE_EXPLAIN: dict[str, str] = {
     "BREAKOUT":     "Breakout level kunci",
     "BREAK_RETEST": "Breakout lalu retest level — tunggu konfirmasi retest pasca-break, bukan kejar breakout",
     "MOMENTUM":     "Momentum kuat searah — tubuh candle meyakinkan, masuk setelah momentum terkonfirmasi",
+    "FLIP":         "Sinyal searah diblokir (veto) — arah lawan lolos via struktur awal tren LTF",
 }
 
 
@@ -114,6 +116,19 @@ def _pullback_checks(sig: Signal) -> list[str]:
     checks = m.group(1).split(",")
     parts = [f"{c[:-1]}{'✓' if c.endswith('+') else '✗'}" for c in checks]
     return ["↩️ <b>Pullback Setup</b>  " + "  ".join(parts)]
+
+
+def _flip_summary(sig: Signal) -> str:
+    """Ringkasan alasan FLIP dari trigger_notes (veto + struktur awal tren)."""
+    notes  = sig.trigger_notes or ""
+    veto   = re.search(r"(LTF_VETO\([^)]*\)|STRUCT_HOLD\([^)]*\))", notes)
+    strike = re.search(r"STR\[([^\]]*)\]", notes)
+    parts: list[str] = []
+    if veto:
+        parts.append("⛔ " + veto.group(1))
+    if strike:
+        parts.append("🛠 " + strike.group(1))
+    return "  ".join(parts)
 
 
 def _technical_section(sig: Signal) -> list[str]:
@@ -233,6 +248,13 @@ def _technical_section(sig: Signal) -> list[str]:
             L.extend(checks)
             L.append("")
 
+    if sig.trigger_notes and sig.trigger_notes.startswith("FLIP["):
+        s = _flip_summary(sig)
+        if s:
+            L.append("🔀 <b>FLIP Setup</b>")
+            L.append(f"   {s}")
+            L.append("")
+
     return L
 
 
@@ -283,6 +305,8 @@ def _format_live(sig: Signal, signal_id: str, signal_mode: str) -> str:
         h_emoji = "🔵" if sig.direction == "BUY" else "🟠"
     elif signal_mode == "PULLBACK":
         h_emoji = "↩️" if sig.direction == "BUY" else "↪️"
+    elif signal_mode == "FLIP":
+        h_emoji = "🔀"
     else:
         h_emoji = "🚀" if sig.direction == "BUY" else "🔻"
 

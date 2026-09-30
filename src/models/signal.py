@@ -6,6 +6,7 @@ from pydantic import BaseModel
 Direction  = Literal["BUY", "SELL"]
 SignalMode = Literal[
     "CONTINUATION", "REVERSAL", "BREAKOUT", "BREAK_RETEST", "MOMENTUM",
+    "BREAKOUT_MOMENTUM", "PULLBACK", "FLIP",
 ]
 
 

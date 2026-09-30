@@ -48,7 +48,6 @@ test_err.txt
 _skripsi_extract.txt
 DEPLOY_CHECKLIST.md
 deploy_to_vps.ps1
-laporan_trading 3.xlsx
 signal_history_backup_before_cleanup.csv
 setup_autostart.ps1
 start_bot.bat
