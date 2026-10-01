@@ -30,7 +30,7 @@ _CONFLUENCE_TFS_SCALPING = ("H4", "H1")
 _CONFLUENCE_TFS_INTRADAY = ("D1", "H4")
 
 _BASE_WINDOW    = 6
-_NEAR_ENTRY_ATR = 1.2   # Radius "dekat zona valid"; dinaikkan 1.0→1.2 agar lebih banyak sinyal lolos confluence
+_NEAR_ENTRY_ATR = 1.2   # Radius "dekat zona valid" (×ATR)
 
 
 def _get_atr(df: pd.DataFrame) -> float:

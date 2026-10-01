@@ -171,7 +171,7 @@ def _scalp_pullback_setup(
         c_div      = any(bool(_safe(r, "rsi_bear_div") or False) for _, r in w_pb.iterrows()) or \
                      any(bool(_safe(r, "macd_bear_div") or False) for _, r in w_pb.iterrows())
 
-    deep     = 0.23 <= retr <= 0.786   # 2026-09-24: 25-70% -> 23-78.6% (batas fib sebelum reversal)
+    deep     = 0.23 <= retr <= 0.786   # batas fib sebelum reversal
     rej_gate = ("trend_tf", trend_tf), ("zone", zone), ("deep", deep), ("structure", structure)
     for name, ok in rej_gate:
         if not ok:
@@ -232,9 +232,10 @@ def _range_rejection_setup(
         return sum([c_rej, c_rsi, c_mom])
 
     sc_b, sc_s = _score_dir("BUY"), _score_dir("SELL")
-    if sc_b >= sc_s and sc_b >= 2:
+    # Min 3/3: semua kriteria harus setuju — skor 2/3 meloloskan sinyal lemah
+    if sc_b >= sc_s and sc_b >= 3:
         return "BUY", f"rej_ok score={sc_b}/3", sc_b
-    if sc_s >= 2:
+    if sc_s >= 3:
         return "SELL", f"rej_ok score={sc_s}/3", sc_s
     return None, f"score_buy={sc_b},score_sell={sc_s}/3", 0
 

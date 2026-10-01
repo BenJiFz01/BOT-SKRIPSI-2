@@ -1,4 +1,4 @@
-"""─ HTF bias voting & trade-mode classification."""
+﻿"""â”€ HTF bias voting & trade-mode classification."""
 
 from __future__ import annotations
 
@@ -61,7 +61,7 @@ def _bias_from_tf(df: pd.DataFrame) -> str | None:
 
 
 def _bias_why_neutral(df: pd.DataFrame) -> str:
-    """Diagnostik kenapa _bias_from_tf None — dipakai log vote bias. Hindari '()' di return (pemangkasan main)."""
+    """Diagnostik kenapa _bias_from_tf None â€” dipakai log vote bias. Hindari '()' di return (pemangkasan main)."""
     if len(df) < 200:
         return "bars_kurang_200"
     last   = _latest_closed(df)
@@ -98,8 +98,8 @@ def _momentum_recovery_bias(
     df_scalp: pd.DataFrame,
     df_h1:    pd.DataFrame | None,
 ) -> tuple[str | None, str]:
-    """Deteksi momentum recovery scalping saat H1 NEUTRAL — sistem skor min 3 dari 4
-    (slope ≥60%, impulse >1.5×ATR, rsi searah, h1_ok EMA50 H1 tak berlawanan), bukan
+    """Deteksi momentum recovery scalping saat H1 NEUTRAL â€” sistem skor min 3 dari 4
+    (slope â‰¥60%, impulse >1.5Ã—ATR, rsi searah, h1_ok EMA50 H1 tak berlawanan), bukan
     wajib semua. Returns (bias, detail) utk log vote bias."""
     if len(df_scalp) < 30:
         return None, "TOO_FEW_BARS"
@@ -142,8 +142,7 @@ def _momentum_recovery_bias(
 
     rsi_ok = (rsi > 50 and rsi > rsi_p) if is_bull else (rsi < 50 and rsi < rsi_p)
 
-    # H1 tidak boleh aktif berlawanan arah; karena skor 3/4, cukup satu syarat boleh
-    # gagal — H1 masih agak turun tapi 3 syarat lain solid tetap lolos.
+    # H1 tidak boleh aktif berlawanan arah; skor 3/4 â€” satu syarat boleh gagal
     h1_ok = True
     if df_h1 is not None and len(df_h1) >= 10:
         try:
@@ -179,11 +178,10 @@ def _vote_bias(
 ) -> tuple[str | None, str]:
     """Vote bias HTF: required_tf (H1 utk M5/M15, H4(+D1) utk intraday) harus punya bias
     jelas + min_confirm_votes sepakat. Scalping cukup H1 saja (data: H4 menekan WR 60%
-    vs 72% saat netral). H1 NEUTRAL → coba momentum recovery. Returns (bias, detail)."""
+    vs 72% saat netral). H1 NEUTRAL â†’ coba momentum recovery. Returns (bias, detail)."""
     trigger_up = trigger_tf.upper()
     is_scalping_tf = trigger_up in ("M5", "M15")
 
-    # TF yang wajib punya bias jelas (bukan NEUTRAL) — tanpanya langsung reject
     _required_tf: dict[str, list[str]] = {
         "M5":  ["H1"],
         "M15": ["H1"],
@@ -218,8 +216,7 @@ def _vote_bias(
     for req in required_tfs:
         if votes_by_tf.get(req) is not None:
             continue
-        # Momentum Recovery scalping saat H1 NEUTRAL: EMA200 H1 belum flip, tapi ada
-        # impulse lokal kuat M5/M15 → cek dengan kriteria lebih ketat.
+        # Momentum Recovery scalping saat H1 NEUTRAL
         if is_scalping_tf and req == "H1":
             df_scalp = data_by_tf.get(trigger_up)
             df_h1    = data_by_tf.get("H1")
@@ -233,8 +230,7 @@ def _vote_bias(
         return None, " ".join(details) + f" [TF_FAIL:{req}=NEUTRAL]"
 
     # Minimal votes harus terpenuhi
-    if max(votes["BULL"], votes["BEAR"]) < min_confirm_votes:
-        return None, " ".join(details)
+    if max(votes["BULL"], votes["BEAR"]) < min_confirm_votes:        return None, " ".join(details)
 
     if votes["BULL"] == votes["BEAR"]:
         return None, " ".join(details)
@@ -244,7 +240,7 @@ def _vote_bias(
 
 
 def _all_tf_bias(data_by_tf: dict[str, pd.DataFrame]) -> str:
-    """Bias semua TF (D1→M15) untuk tampilan stack sinyal — diagnostik, bukan keputusan gate."""
+    """Bias semua TF (D1â†’M15) untuk tampilan stack sinyal â€” diagnostik, bukan keputusan gate."""
     parts: list[str] = []
     for tf in ["D1", "H4", "H1", "M15"]:
         df = data_by_tf.get(tf)
@@ -265,3 +261,4 @@ def _detect_trade_mode(trigger_tf: str) -> tuple[str, str]:
     if tf == "H1":
         return "intraday", "M15"
     return "intraday", "H1"
+

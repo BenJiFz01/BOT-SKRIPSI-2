@@ -37,20 +37,14 @@ def _confluence_score(
     gabungan 1.0 (scalping saja, OFF → logging-only). Alignment 3+ TF +1.0. Skor
     float dibulatkan ke int di akhir; minimal threshold dikalibrasi utk skala ini.
     """
-    # Bobot komponen — 2026-09-24 rekalibrasi dari component_accuracy:
-    # Pattern 56.2% / Fib 53.0% / RSI(+) tetap dipertahankan; SND 38.5%
-    # & SNR 46.7% (di bawah tebakan random) diturunkan drastis agar skor
-    # confluence kembali proksimat akurasi riil komponen.
     _W_PATTERN   = 1.5   
     _W_FIB       = 1.5   
     _W_DIV       = 1.5   
-    _W_SNR       = 0.5   # turun dr 1.0: akurasi 46.7% < random
-    _W_SND       = 1.0   # turun dr 2.0: akurasi 38.5% justru penekan WR   
-    # Bonus SWEEP+FVG gabungan: max total 1.0, share dibagi rata (+0.5 masing-masing);
-    # belum divalidasi, default logging-only.
-    _W_SWEEP_FVG = 1.0   
+    _W_SNR       = 0.5   # akurasi rendah
+    _W_SND       = 1.0   # akurasi rendah
+    _W_SWEEP_FVG = 1.0   # bonus Sweep+FVG gabungan, default logging-only
     direction = direction.upper()
-    score: float = 0.0   # float untuk akumulasi bobot, dibulatkan ke int di akhir
+    score: float = 0.0
     notes: list[str] = []
     detail: dict = {
         "pattern_names": "",
@@ -63,7 +57,6 @@ def _confluence_score(
     }
     last = _latest_closed(df)
 
-    # Pattern — bobot 1.5 (akurasi tertinggi)
     bull_count = int(_safe(last, "pattern_bull_count") or 0)
     bear_count = int(_safe(last, "pattern_bear_count") or 0)
     count = bull_count if direction == "BUY" else bear_count
@@ -73,8 +66,7 @@ def _confluence_score(
         score += 1 * _W_PATTERN; notes.append("Pattern+")
     else:
         notes.append("Pattern-")
-    # Fallback: kalau kolom pattern kosong padahal count>0, scan ulang dari PATTERN_FUNCS
-    # agar pattern_names selalu konsisten dengan skor.
+    # Fallback: scan ulang dari PATTERN_FUNCS agar pattern_names konsisten dengan skor
     pattern_names = _get_active_patterns(direction, last)
     if not pattern_names and count > 0:
         from src.features.patterns import PATTERN_FUNCS
@@ -88,7 +80,6 @@ def _confluence_score(
                 pattern_names.append(pname.replace("CDL", ""))
     detail["pattern_names"] = ", ".join(pattern_names[:3]) if pattern_names else ""
 
-    # Divergence — bobot 1.5
     div_keys = {
         "BUY":  [("rsi_bull_div", "RSI"), ("macd_bull_div", "MACD")],
         "SELL": [("rsi_bear_div", "RSI"), ("macd_bear_div", "MACD")],
@@ -103,7 +94,6 @@ def _confluence_score(
         notes.append("Div-")
     detail["div_detail"] = "+".join(div_parts)
 
-    # Fibonacci — bobot 1.5 (akurasi tertinggi bersama Pattern)
     if atr > 0:
         fib_sc, fib_note = fib_confluence_score(
             direction=direction, entry_price=entry, df=df, atr=atr,
@@ -115,7 +105,6 @@ def _confluence_score(
     else:
         notes.append("Fib_SKIP")
 
-    # SNR — Bug #1+#2 fix: pass tf + data_by_tf
     if atr > 0:
         snr_sc, snr_note = snr_confluence_score(
             direction=direction, entry_price=entry,
@@ -123,14 +112,13 @@ def _confluence_score(
             tf=tf, is_scalping=is_scalping,
             data_by_tf=data_by_tf,
         )
-        # Bug #4 fix: SNR_BLOCKED jadi hard-reject di semua mode, bukan cuma scalping
+        # SNR_BLOCKED → hard reject
         if "SNR_BLOCKED" in snr_note:
             detail["snr_detail"] = snr_note
             notes.append("SnR_BLOCKED")
             return -99, " ".join(notes), detail
 
-        # SNR weighted: str<35 (2-touch)→30%, 35-49 (3-4 touch)→60%, >=50 (5+ touch)→100%;
-        # biarkan level lemah berkontribusi kecil, tetap prioritaskan level kuat.
+        # SNR weighted by touch count
         if snr_sc > 0:
             _str_match = re.search(r"str=(\d+)", snr_note)
             _snr_strength = int(_str_match.group(1)) if _str_match else 99
@@ -151,7 +139,6 @@ def _confluence_score(
     else:
         notes.append("SnR_SKIP")
 
-    # SND — bobot 1.0
     if atr > 0:
         snd_sc, snd_note = snd_confluence_score(
             direction=direction, entry_price=entry,
@@ -164,8 +151,7 @@ def _confluence_score(
     else:
         notes.append("SnD_SKIP")
 
-    # Sweep + FVG: konfluensi scalping (entry-timing); intraday skip. Default logging-only —
-    # detail dicatat utk validasi, skor tak berubah sampai flag diaktifkan.
+    # Sweep+FVG: scalping entry-timing, default logging-only
     if is_scalping and atr > 0:
         sweep_sc, sweep_note = liquidity_sweep_score(
             direction=direction, entry=entry, df=df, atr=atr,
@@ -179,10 +165,7 @@ def _confluence_score(
         detail["fvg_detail"]   = fvg_note  if fvg_sc  > 0 else ""
         notes.append(sweep_note if sweep_sc > 0 else "SWEEP-")
         notes.append(fvg_note if fvg_sc > 0 else "FVG-")
-        # Bonus gabungan: total max +1.0; jika keduanya hadir, share dibagi rata.
-        # Hanya dibayarkan kalau ada key level (SNR/SND). Tanpa level, detail tetap
-        # dicatat utk validasi tapi skor tidak berubah — Sweep/FVG pelengkap, bukan
-        # pengganti S/R (kasus loss 22/09: Sweep+1.0x tanpa SnR/SnD).
+        # Sweep/FVG bonus only with key level present
         _has_key_level = (snr_sc > 0) or (snd_sc > 0)
         _detected = [
             name

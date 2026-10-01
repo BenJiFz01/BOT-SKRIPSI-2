@@ -34,13 +34,11 @@ class _TpConfig:
 
 _SL_SCALPING = _SlConfig(atr_mult=1.2, min_sl_pts=5.0,  max_sl_pts=10.0, lookback=20)
 _SL_INTRADAY = _SlConfig(atr_mult=1.5, min_sl_pts=10.0, max_sl_pts=60.0, lookback=40)
-# Scalping: ladder proporsional SL 0.7/1.0/1.3R (vs intraday 1.5/2.5/4.0R) — TP lebih sering tersentuh.
 _TP_SCALPING = _TpConfig(tp1_rr=0.7, tp2_rr=1.0, tp3_rr=1.3, tp1_atr_mult=0.0)
 _TP_INTRADAY = _TpConfig(tp1_rr=1.5, tp2_rr=2.5, tp3_rr=4.0)
 
-# Entry zone fraction — 0.3×ATR dari close
 _EZ_FRAC = 0.3
-# Structural SL buffer — 0.5×ATR di luar swing point (naik dari 0.3, anti zona stop-hunt)
+# anti stop-hunt buffer
 _STRUCT_BUFFER_FRAC = 0.5
 
 
@@ -51,8 +49,6 @@ def get_sl_config(is_scalping: bool) -> _SlConfig:
 def get_tp_config(is_scalping: bool) -> _TpConfig:
     return _TP_SCALPING if is_scalping else _TP_INTRADAY
 
-
-# Data class
 
 @dataclass
 class SLTPlan:
@@ -71,8 +67,6 @@ class SLTPlan:
     sl_source:    str   = field(default="")
     obstacle_tp1: float = field(default=0.0)
 
-
-# Helpers
 
 def _valid(*values: float) -> bool:
     return all(math.isfinite(v) and v > 0 for v in values)
@@ -95,7 +89,6 @@ def _swing_sl(
     recent = df.iloc[-(lookback + 2):-1].reset_index(drop=True)
 
     if direction == "BUY":
-        # SL di bawah pivot low terdekat
         cands = sorted(
             [v for _, v in pivot_lows(recent, window=3) if v < price_now],
             reverse=True,  # nearest first
@@ -106,7 +99,6 @@ def _swing_sl(
             if 0 < dist <= max_dist:
                 return sl
     else:
-        # SL di atas pivot high terdekat
         cands = sorted(
             [v for _, v in pivot_highs(recent, window=3) if v > price_now]
         )
@@ -182,7 +174,6 @@ def _build_plan(
     if d == "BUY":
         entry_high = p
         entry_low  = round(p - ez, 5)
-        # Pastikan SL di bawah entry_low
         if sl_raw >= entry_low:
             sl_raw = entry_low - _STRUCT_BUFFER_FRAC * a
         sl         = round(sl_raw, 5)
@@ -193,7 +184,6 @@ def _build_plan(
     else:
         entry_low  = p
         entry_high = round(p + ez, 5)
-        # Pastikan SL di atas entry_high
         if sl_raw <= entry_high:
             sl_raw = entry_high + _STRUCT_BUFFER_FRAC * a
         sl         = round(sl_raw, 5)
@@ -206,7 +196,6 @@ def _build_plan(
         return None
 
     if tp1_atr_mult > 0:
-        # TP1 ATR-based — kunci profit cepat, tidak ikut lebar saat SL lebar.
         tp1 = round(ref_entry + sign * tp1_atr_mult * a, 5)
     else:
         tp1 = round(ref_entry + sign * sl_dist * r1, 5)
@@ -214,11 +203,9 @@ def _build_plan(
     tp3 = round(ref_entry + sign * sl_dist * r3, 5)
 
     if df is not None and len(df) >= 20:
-        # TP1 tetap digeser lewat obstacle adjust selama RR terjaga >= 0.8.
         tp1 = round(_adjust_tp_for_obstacle(d, ref_entry, tp1, a, sl_dist, df, min_rr=0.8), 5)
         tp2 = round(_adjust_tp_for_obstacle(d, ref_entry, tp2, a, sl_dist, df, min_rr=1.5), 5)
 
-    # Sanity check arah TP
     if d == "BUY" and not (sl < entry_low < entry_high < tp1):
         return None
     if d == "SELL" and not (tp1 < entry_low < entry_high < sl):
@@ -237,8 +224,6 @@ def _build_plan(
         sl_source=sl_source,
     )
 
-
-# Fungsi utama
 
 def calc_sltp(
     direction:   str,

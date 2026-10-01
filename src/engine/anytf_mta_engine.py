@@ -101,20 +101,18 @@ def evaluate_any_tf_mta(
     df_t = data_by_tf[trigger_tf]
     _reject(df_t, "INIT")
 
-    # Circuit breaker: counter loss terpisah per mode (key "{symbol}_{mode}") —
-    # loss scalping tak memblokir intraday dan sebaliknya.
+    # Circuit breaker key terpisah per mode (scalping vs intraday)
     today_str   = datetime.now().strftime("%Y-%m-%d")
     _is_scalping_tf = trigger_tf in {"M5", "M15"}
     _cb_key     = f"{symbol}_{'scalping' if _is_scalping_tf else 'intraday'}"
     _cb_mode    = "scalping" if _is_scalping_tf else "intraday"
 
-    # GATE 1 — Validasi teknis
+    # GATE 1
     if len(df_t) < 200:
         _reject(df_t, f"NOT_ENOUGH_BARS({len(df_t)})"); return None
 
     last          = _latest_closed(df_t)
     close_time_ts = pd.to_datetime(last["time"])
-    # Simpan sebagai UTC eksplisit (suffix +00:00) agar iso_to_wib_str() tahu perlu konversi
     close_time    = str(close_time_ts.to_pydatetime().replace(tzinfo=pytz.utc).isoformat())
     price_now     = float(last["close"])
     atr           = _atr_proxy(df_t)
@@ -126,8 +124,7 @@ def evaluate_any_tf_mta(
 
     is_scalping = trigger_tf in {"M5", "M15"}
 
-    # ATR absolut khusus scalping: tolak rentang paling sempit supaya SL/TP ATR-based
-    # punya ruang; atr_min_pct (relatif) tetap menjaring pasar ultra-flat.
+    # ATR absolut scalping: tolak rentang terlalu sempit agar SL/TP punya ruang
     if is_scalping and scalping_atr_min_points > 0 and atr < scalping_atr_min_points:
         _reject(df_t, f"ATR_TOO_LOW_SCALPING(atr={atr:.2f}/min={scalping_atr_min_points:.1f})")
         return None
@@ -135,7 +132,6 @@ def evaluate_any_tf_mta(
     if is_scalping:
         base_trig  = scalping_min_trigger_score
         base_conf  = scalping_min_confluence_score
-        # Cooldown per-TF: M5/M15 punya nilai sendiri, TF lain fallback ke umum.
         if trigger_tf == "M5":
             base_cd = scalping_cooldown_bars_m5
         elif trigger_tf == "M15":
@@ -173,27 +169,24 @@ def evaluate_any_tf_mta(
     now_utc = close_time_ts.to_pydatetime().replace(tzinfo=pytz.utc) if close_time_ts.tzinfo is None else close_time_ts.to_pydatetime()
     sess    = session_name(now_utc)
     
-    # Asian CONTINUATION: +1 trigger & +1 confluence. Bias baru diketahui di GATE 2,
-    # maka session dicek di sini; hanya jalur CONTINUATION (REVERSAL/CT tak terpengaruh).
+    # Asian session: +1 trig & +1 conf untuk continuation scalping
     if _asian_continuation_pending and session_strictness(now_utc, tf=trigger_tf) == "RELAXED":
         eff_trig += 1
         eff_conf += 1
 
-    # H1 hardening: rekam 29th WR 19% + loss gantung 6-10 jam — bar H1 dinaikkan
-    # +1 trigger & +1 confluence (sebelum cap), key level diwajibkan di GATE 5.
+    # H1: +1 trig & +1 conf (WR historis 19% tanpa hardening)
     if trigger_tf == "H1":
         eff_trig += 1
         eff_conf += 1
 
-    # Cap: sideways(+1) dan asian(+1) bisa numpuk — tanpa cap butuh semua komponen
-    # sepakat (nyaris mustahil). Trig cap 5, conf cap 4.
+    # Cap agar sideways(+1) dan asian(+1) tak numpuk terlalu tinggi
     eff_trig = min(eff_trig, 5)
     eff_conf = min(eff_conf, 4)
 
     if session_filter and not is_active_session(now_utc, trigger_tf):
         _reject(df_t, f"OUT_OF_SESSION({sess})"); return None
 
-    # GATE 2 — HTF Bias
+    # GATE 2
     confirm_tfs       = higher_timeframes(trigger_tf, enabled_tfs)
     bias, bias_detail = _vote_bias(
         data_by_tf=data_by_tf, confirm_tfs=confirm_tfs,
@@ -202,7 +195,7 @@ def evaluate_any_tf_mta(
         intraday_require_d1=intraday_require_d1,
     )
 
-    # GATE 3 — Trigger Score (Market-State Dispatch)
+    # GATE 3 — Trigger Score
     direction:    str | None = None
     trig_score:   int        = 0
     trig_notes:   str        = ""
@@ -212,8 +205,6 @@ def evaluate_any_tf_mta(
     _mom_active:  bool       = False
     _range_active: bool      = False
 
-    # Market State Detector (2026-09-24): klasifikasi kondisi pasar → PILIH JALUR entry.
-    # State hanya menukar logic aktif, gate/threshold tetap utuh.
     market_state, state_note = _market_state(
         df_t, trigger_tf, data_by_tf,
         market_transition_adx_block, market_transition_adx_gray,
@@ -222,22 +213,15 @@ def evaluate_any_tf_mta(
     if bias in ("BULL", "BEAR"):
         dir_try = "BUY" if bias == "BULL" else "SELL"
 
-        # MARKET TRANSITION: tren kehabisan tenaga — continuation diblokir sebelum
-        # buang-buang perhitungan (reversal/breakout jalur ketat; reversal off default).
         if market_state == "TRANSITION":
             _reject(df_t, f"MARKET_TRANSITION(state={state_note})")
             return None
 
-        # Jalur 1 — CONTINUATION (trigger standar, gate EMA200 ketat 0.2×ATR).
         ok, sc, nt = _trigger_score(df_t, dir_try, eff_trig)
         if ok:
             direction, trig_score, trig_notes = dir_try, sc, nt
         elif scalping_pullback_enabled and is_scalping:
-            # Jalur 2 — PULLBACK (retrace 23-78.6% dlm tren kuat), diprioritaskan sebelum
-            # momentum — hanya tanpa pullback, berlanjut ke jalur momentum.
             _pb_ok, _pb_note = _scalp_pullback_setup(df_t, dir_try, atr)
-            # Pullback floor: setup tanpa trigger minimal (kasus 0/6 lolos 29th) tak
-            # boleh emit — gagal floor jatuh ke jalur momentum seperti pullback gagal.
             _pb_tok, _pb_tsc, _pb_tnt = _trigger_score(df_t, dir_try, min_score=scalping_pullback_min_trigger)
             if _pb_ok and _pb_tok:
                 direction, trig_score, trig_notes = dir_try, _pb_tsc, f"PULLBACK[{_pb_note}]"
@@ -245,8 +229,7 @@ def evaluate_any_tf_mta(
             else:
                 if _pb_ok:
                     _pb_note = f"{_pb_note}+TRIGWEAK({_pb_tnt})"
-                # Jalur 3 — MOMENTUM/BREAKOUT (tren kuat TANPA pullback → harga tak
-                # kembali ke EMA200): gate EMA200 dilonggarkan via MOMENTUM_EMA200_TOLERANCE.
+                # Jalur MOMENTUM/BREAKOUT: EMA200 dilonggarkan
                 if market_state in ("HIGH_MOMENTUM", "TREND_BULL", "TREND_BEAR", "BREAKOUT"):
                     _mok, _msc, _mnt = _trigger_score(
                         df_t, dir_try, eff_trig,
@@ -270,7 +253,6 @@ def evaluate_any_tf_mta(
                           f"cond={market_cond} state={market_state}")
             return None
 
-        # Market Transition Gate (zonasi ADX abu-abu): block..gray → +1 confluence.
         _dec_reason, _dec_bonus = _decisive_adx(
             trigger_tf, data_by_tf, market_transition_adx_block,
             market_transition_adx_gray,
@@ -280,7 +262,6 @@ def evaluate_any_tf_mta(
             return None
         eff_conf = min(eff_conf + _dec_bonus, 5)
     else:
-        # Bias HTF NEUTRAL → dua pilihan: CT/reversal (off default) atau RANGE lane.
         _ct_tfs = [t.upper() for t in (counter_trend_tfs or ["H1", "H4"])]
         if counter_trend_enabled and trigger_tf in _ct_tfs:
             ct_direction: str | None = None
@@ -306,8 +287,6 @@ def evaluate_any_tf_mta(
             if "EMA200-" in trig_full:
                 _reject(df_t, f"CT_EMA200_FAIL({trig_full})"); return None
         elif range_rejection_enabled and is_scalping and market_state == "RANGE":
-            # RANGE lane: sideways ASLI (bias netral + ADX sinyal rendah) → rejection di
-            # level kunci. Key level (SnR/SnD) diverifikasi di GATE 5; tanpa level = NO SIGNAL.
             _r_dir, _r_note, _r_sc = _range_rejection_setup(df_t, atr)
             if _r_dir is None:
                 _reject(df_t, f"RANGE_NO_REJECTION[{_r_note}] state={market_state}({state_note})")
@@ -319,13 +298,8 @@ def evaluate_any_tf_mta(
             _reject(df_t, f"BIAS_FAIL({bias_detail}) state={market_state}({state_note})")
             return None
 
-    # LTF veto + flip lane (simetris dua arah). Veto defensif: blokir sinyal searah
-    # bias HTF saat kaki momentum LTF berlawanan masih utuh (kasus 29th: H1 BEAR +
-    # rally M5/M15 → SELL diblokir). Anti-flicker: kalau momentum patah tapi struktur
-    # swing lawan (higher-low/lower-high) belum patah, veto tetap aktif.
-    # Flip ofensif: arah berlawanan dievaluasi dgn gate ketat (trigger ≥3, atau ≥2 bila
-    # ada struktur awal tren: swing/base break) + key level di GATE 5; gagal = reject.
-    # Hanya lane continuation/momentum — pullback/range/CT punya logika sendiri.
+    # LTF veto + flip lane: blokir sinyal searah bias saat momentum LTF berlawanan utuh,
+    # evaluasi flip ke arah lawan dengan gate ketat (trigger + key level di GATE 5).
     if direction in ("BUY", "SELL") and not (_pb_active or _range_active or _is_counter) and ltf_veto_enabled:
         _opp = "BUY" if direction == "SELL" else "SELL"
         _vetoed, _veto_note = _ltf_counter_veto(df_t, direction, atr)
@@ -347,30 +321,24 @@ def evaluate_any_tf_mta(
                 _reject(df_t, f"{_veto_note} flip_fail[trig={_fsc} str={_ts_note or '-'} {_v2_note}]")
                 return None
 
-    # Anti-chase (fix 1 + fix 4): tolak bila harga sudah menyimpang DARI setup candle
-    # cukup untuk membuat zona entry tidak valid lagi. _chase diukur searah target
-    # (SELL: setup turun, BUY: setup naik) — lonjakan 1-2 candle terdeteksi, real-time
-    # (dist≈0) otomatis lolos. Guard sisi berlawanan (breakout): harga lewat zona atas/bawah.
+    # Anti-chase: tolak bila harga sudah menyimpang dari setup candle (chasing)
     _setup_ohlc = df_t.iloc[-2] if len(df_t) >= 2 else df_t.iloc[-1]
     _set_close  = float(_setup_ohlc["close"])
     _set_hi     = float(_setup_ohlc["high"])
     _set_lo     = float(_setup_ohlc["low"])
-    _ez_half    = 0.3 * atr   # setengah lebar zona entry (sama dgn _EZ_FRAC di sl_tp)
+    _ez_half    = 0.3 * atr
     _ez_top     = _set_hi + _ez_half
     _ez_bot     = _set_lo - _ez_half
     _chase      = (_set_close - price_now) if direction == "SELL" else (price_now - _set_close)
     _chase_max  = 1.5 * atr
     if _chase > _chase_max:
         _reject(df_t, f"LATE_ENTRY(chase={_chase:.2f}/max={_chase_max:.2f})"); return None
-    # Skip-rule jadi gate: SELL tak valid bila harga sudah di atas zona (breakout),
-    # BUY tak valid bila harga sudah di bawah zona.
     if direction == "SELL" and price_now > _ez_top:
         _reject(df_t, f"ZONE_PASSED(price={price_now:.2f}>top={_ez_top:.2f})"); return None
     if direction == "BUY" and price_now < _ez_bot:
         _reject(df_t, f"ZONE_PASSED(price={price_now:.2f}<bot={_ez_bot:.2f})"); return None
 
     # GATE 4 — SL/TP
-    # RR berbeda untuk scalping (ambil profit cepat) vs intraday
     eff_tp1_rr = scalping_tp1_rr if is_scalping else tp1_rr
     eff_tp2_rr = scalping_tp2_rr if is_scalping else tp2_rr
     eff_tp3_rr = scalping_tp3_rr if is_scalping else tp3_rr
@@ -409,7 +377,7 @@ def evaluate_any_tf_mta(
     if plan is None:
         _reject(df_t, "SLTP_NONE"); return None
 
-    # GATE 5 — Confluence + RR
+    # GATE 5 — Confluence
     conf_score, conf_notes, conf_detail = _confluence_score(
         df=df_t, direction=direction, entry=price_now, atr=atr,
         tf=trigger_tf, is_scalping=is_scalping, sl=float(plan.sl),
@@ -422,40 +390,39 @@ def evaluate_any_tf_mta(
         _reject(df_t, f"CONFLUENCE_FAIL conf={conf_score}/{eff_conf}[{conf_notes}] cond={market_cond}")
         return None
 
-    # RANGE lane wajib punya key level (SnR/SnD) — rejection di level, bukan di tempat kosong.
-    # (Tanpa level, konfluensi bisa lolos via Pattern/Fib — di range itu = noise.)
+    # RANGE lane wajib key level (SnR/SnD)
     if _range_active and not _has_key_level(conf_notes):
         _reject(df_t, f"RANGE_NO_KEY_LEVEL[{conf_notes}]")
         return None
 
-    # H1 hardening: rekam WR 19% + loss gantung 6-10 jam (29th: 3/3 LOSS, semua SNR_FAR).
-    # Trigger H1 menahan posisi berjam-jam — tanpa key level = NO SIGNAL.
+    # H1 wajib key level (WR historis 19% tanpa gate ini)
     if trigger_tf == "H1" and h1_require_key_level and not _has_key_level(conf_notes):
         _reject(df_t, f"H1_NO_KEY_LEVEL[{conf_notes}]")
         return None
 
-    # Flip lane wajib punya key level — entry melawan bias HTF hanya valid di level,
-    # bukan di tengah jalan (kontrol risiko ofensif; data reversal mentah WR 18%).
+    # FLIP wajib key level (entry melawan bias HTF hanya valid di level)
     if _flip_active and flip_require_key_level and not _has_key_level(conf_notes):
         _reject(df_t, f"FLIP_NO_KEY_LEVEL[{conf_notes}]")
         return None
 
-    # Quality key-level gate (2026-09-30): di pasar RANGE/CLEAN atau cond sideways,
-    # jalur continuation/momentum wajib level BERKUALITAS — SnR 3-touch (SnR_MED/SnR+)
-    # atau FIB_GOLDEN. SnR_WEAK (2-touch) tak dihitung: kasus loss 30/09 12:00 BUY 5/6
-    # di RANGE dgn SnR_WEAK disapu 15m padahal arah benar; semua WIN hari itu punya
-    # SnR 3-touch + FIB_GOLDEN. Pullback/range/flip/CT punya gerbang sendiri → tak diapply.
+    # RANGE/sideways continuation wajib level berkualitas (SnR 3-touch / FIB_GOLDEN)
     if range_quality_key_level and not (_pb_active or _range_active or _flip_active or _is_counter):
         if market_state in ("RANGE", "CLEAN") or market_cond == "sideways":
             if not _has_quality_key_level(conf_notes):
                 _reject(df_t, f"RANGE_QUALITY_NO_KEY_LEVEL[{conf_notes}]")
                 return None
 
+    # MOM_RECOVERY wajib level dekat entry (SnR/SnD/FIB_GOLDEN)
+    _is_mom_recovery = "MOM_RECOVERY:" in bias_detail and "MOM_RECOVERY_FAIL" not in bias_detail
+    if _is_mom_recovery and not (_pb_active or _range_active or _flip_active or _is_counter):
+        if not (_has_key_level(conf_notes) or "FIB_GOLDEN" in conf_notes):
+            _reject(df_t, f"MOM_RECOVERY_NO_LEVEL[{conf_notes}] bias={bias_detail}")
+            return None
+
     entry_for_rr = plan.entry_high if direction == "BUY" else plan.entry_low
     rr            = calc_rr(direction, entry_for_rr, plan.sl, plan.tp1)
     rr_tp2_actual = calc_rr(direction, entry_for_rr, plan.sl, plan.tp2)
-    # Gate anti-chase (pengganti RR gate — TP proporsional SL membuat rr tetap): tolak entry
-    # yang "ngejar" — harga lebih jauh dari EMA20 sinyal-TF dari batas (×ATR).
+    # Overextension guard: tolak entry yang terlalu jauh dari EMA20
     if is_scalping:
         _closed = df_t.iloc[:-1]
         if len(_closed) >= 30 and "close" in _closed.columns:
@@ -465,28 +432,22 @@ def evaluate_any_tf_mta(
             if _over > _oe_max:
                 _reject(df_t, f"OVEREXTENSION(ema20_dist={_over:.2f}/max={_oe_max:.2f})"); return None
 
-    # Normalisasi ke tz-naive sebelum simpan agar konsisten saat load ulang
     ts_to_save = close_time_ts.tz_localize(None) if close_time_ts.tzinfo is not None else close_time_ts
     _LAST_SIGNAL_TIME[key] = ts_to_save
     _save_cooldown_state()
     _reject(df_t, "OK")
 
-    # [8-Strategi — ADITIF] Label setup classifier (display/dedup, tak ubah skor-gate-threshold)
     setup_mode, setup_note = classify_entry_setup(df_t, direction, atr)
-    # Mode dasar diambil dr JALUR yang aktif (state-based): momentum lane di atas
-    # tren kuat tanpa pullback dilabeli MOMENTUM (atau BREAKOUT kalau state breakout).
     _state_mode: str | None = None
     if _mom_active:
         _state_mode = "BREAKOUT_MOMENTUM" if market_state == "BREAKOUT" else "MOMENTUM"
     elif _range_active:
         _state_mode = "RANGE_REJECT"
     base_mode = "FLIP" if _flip_active else (_state_mode or ("PULLBACK" if _pb_active else ("REVERSAL" if _is_counter else "CONTINUATION")))
-    # FLIP dipaksa menang atas classifier agar terpisah di data (evaluasi butuh label murni).
     final_mode = base_mode if _flip_active else (setup_mode if setup_mode else base_mode)
     mkt_tag = f" [{market_cond.upper()}/{market_state}]" if market_cond else ""
 
-    # [Conflict resolver — anti spam "3 sinyal sekaligus"] dedup LINTAS-TF per (symbol, direction):
-    # kirim duplikat arah-sama dalam window hanya bila konfluensinya LEBIH TINGGI dr yg terakhir.
+    # Dedup lintas-TF: kirim duplikat arah-sama hanya bila konfluensi lebih tinggi
     _conf_key   = (symbol, direction)
     _now_ts     = close_time_ts.timestamp()
     _curr_conf  = float(conf_score)

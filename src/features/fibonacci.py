@@ -1,4 +1,4 @@
-"""fibonacci.py — Fibonacci Retracement untuk XAU/USD."""
+﻿"""fibonacci.py â€” Fibonacci Retracement untuk XAU/USD."""
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -135,7 +135,7 @@ def last_swing(
         p_highs = pivot_highs(w, window=3)
         p_lows  = pivot_lows(w,  window=3)
 
-    # Fallback min/max absolut jika masih tidak ada pivot
+    # Fallback ke min/max absolut jika masih tidak ada pivot
     if not p_highs or not p_lows:
         w2     = df.iloc[-min(lookback, 50):].copy()
         idx_hi = w2["high"].idxmax()
@@ -216,7 +216,7 @@ def recent_swings(
             if min_impulse > 0 and (hi_val - lo_val) < min_impulse:
                 continue
             sw = (lo_val, hi_val, "UP")
-            # Hindari duplikat (swing yang sangat mirip)
+            # Hindari duplikat (swing sangat mirip)
             if not any(abs(r[0] - sw[0]) < 0.01 and abs(r[1] - sw[1]) < 0.01 for r in results):
                 results.append(sw)
 
@@ -305,7 +305,7 @@ def fib_confluence_score(
     eff_atr = src_atr if src_atr > 0 else atr
     min_imp = cfg.min_impulse_atr * eff_atr
 
-    # Coba beberapa swing, dari yang terbaru ke yang lama
+    # Fallback ke swing lama (rank-1/2) jika level swing terbaru terlalu jauh dari entry
     swings = recent_swings(src_df, cfg.lookback, direction, cfg.pivot_length, min_imp, max_results=3)
     if not swings:
         return 0, f"FIB_NO_SWING(min={min_imp:.1f})"
@@ -336,7 +336,7 @@ def fib_confluence_score(
     if base_score == 0:
         return 0, f"FIB_FAR(no_swing_near tol={tolerance:.1f})"
 
-    # Multi-TF confluence bonus — konsisten dengan SNR/SND
+    # Multi-TF confluence bonus
     conf_tfs  = _CONF_TFS_SCALPING if is_scalping else _CONF_TFS_INTRADAY
     bonus     = 0
     bonus_tfs: list[str] = []
@@ -359,3 +359,5 @@ def fib_confluence_score(
 
 def fib_lookback_for_tf(tf: str) -> int:
     return {"M5": 200, "M15": 200, "H1": 300, "H4": 300, "D1": 200}.get(tf.upper(), 200)
+
+

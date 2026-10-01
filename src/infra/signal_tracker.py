@@ -167,7 +167,7 @@ class SignalTracker:
             if ts is None or ts.resolved:
                 continue
 
-            # Cache harga per symbol agar tidak double-call MT5
+        # Cache harga per symbol
             sym = ts.symbol
             if sym not in prices_cache:
                 try:
@@ -208,7 +208,7 @@ class SignalTracker:
         is_buy     = ts.direction == "BUY"
         check_price = bid if is_buy else ask
 
-        # Setup plan: tunggu harga masuk entry zone (entry_low–entry_high) dulu
+    # Setup plan: tunggu harga masuk entry zone dulu
         if not ts.entry_zone_hit:
             price_mid = (bid + ask) / 2
             in_zone = ts.entry_low <= price_mid <= ts.entry_high
@@ -216,13 +216,12 @@ class SignalTracker:
                 ts.entry_zone_hit = True
                 logger.info(f"[TRACKER] Entry zone hit | {ts.signal_id} | price={price_mid:.2f} zone={ts.entry_low:.2f}-{ts.entry_high:.2f}")
             else:
-                # Belum masuk zona — cek apakah SL sudah tersentuh sebelum zona (sinyal batal)
                 sl_before_entry = (is_buy and check_price <= ts.sl) or (not is_buy and check_price >= ts.sl)
                 if sl_before_entry:
                     self._resolve(ts, "CANCELLED", check_price, now, "SL_BEFORE_ENTRY")
                 return  # belum masuk zona, belum monitor TP
 
-        # SL efektif = breakeven_sl jika aktif (TP1 sudah kena), else SL awal
+        # SL efektif = breakeven jika TP1 sudah kena
         effective_sl = ts.breakeven_sl if ts.breakeven_sl is not None else ts.sl
         sl_hit = (is_buy and check_price <= effective_sl) or \
                  (not is_buy and check_price >= effective_sl)
@@ -237,7 +236,7 @@ class SignalTracker:
                 self._logger.update_hit_time(ts.signal_id, "tp1", now.strftime("%Y-%m-%dT%H:%M:%S"))
                 self._send_tp_notify("🎯 <b>TP1 TERCAPAI</b>", ts.signal_id, check_price)
 
-                # SL breakeven = entry price — posisi sisa tak bisa rugi meski harga balik
+                # Breakeven: posisi sisa tak bisa rugi meski harga balik
                 ts.breakeven_sl = ts.entry
                 logger.info(
                     f"[TRACKER] Breakeven aktif | {ts.signal_id} | "
@@ -295,7 +294,7 @@ class SignalTracker:
         elif outcome.startswith("WIN"):
             reset_consec_loss(_cb_key)
 
-        # Kirim Telegram dulu — notif tak tertahan operasi file I/O
+        # Kirim Telegram dulu — tidak tertahan I/O file
         if self._notify and outcome != "CANCELLED" and is_new:
             try:
                 self._notify(
@@ -308,7 +307,7 @@ class SignalTracker:
             except Exception as e:
                 logger.warning(f"Tracker notify error: {e}")
 
-        # Simpan ke file (JSON + CSV) di thread terpisah agar I/O tak memblokir polling
+        # Simpan ke file di thread terpisah agar I/O tak memblokir polling
         def _save_async() -> None:
             try:
                 self._logger.update_outcome(

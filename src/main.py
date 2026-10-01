@@ -200,7 +200,8 @@ def main() -> None:
     )
     logger.info(
         f"PARAMS SCALPING | TP={s.scalping_tp1_rr}R/{s.scalping_tp2_rr}R/{s.scalping_tp3_rr}R "
-        f"SL<=10pt ATR>=5 OE>={s.scalping_overextend_atr_mult}×ATR "
+        f"SLM5<={s.max_sl_m5}pt SLM15<={s.max_sl_m15}pt ATR>={s.scalping_atr_min_points}pt "
+        f"OE>={s.scalping_overextend_atr_mult}×ATR "
         f"PB={'ON' if s.scalping_pullback_enabled else 'OFF'} "
         f"Sweep={'ON' if s.scalping_sweep_enabled else 'OFF'} FVG={'ON' if s.scalping_fvg_enabled else 'OFF'} "
         f"trig>={s.scalping_min_trigger_score} conf>={s.scalping_min_confluence_score} "
@@ -250,7 +251,7 @@ def main() -> None:
                 f"| D1_anchor={'ON' if s.intraday_require_d1 else 'OFF'} "
                 f"| Cooldown={s.cooldown_bars}bar\n"
                 f"<b>Scalping</b>: TP={s.scalping_tp1_rr}R/{s.scalping_tp2_rr}R/{s.scalping_tp3_rr}R "
-                f"| SL<=10pt | OE>={s.scalping_overextend_atr_mult}×ATR "
+                f"| SLM5<={s.max_sl_m5}pt | ATR>={s.scalping_atr_min_points}pt | OE>={s.scalping_overextend_atr_mult}×ATR "
                 f"| PB={'ON' if s.scalping_pullback_enabled else 'OFF'} "
                 f"| Trig>={s.scalping_min_trigger_score} | Conf>={s.scalping_min_confluence_score}\n"
                 f"Session  : {'ON' if s.session_filter else 'OFF'}\n"

@@ -144,7 +144,6 @@ def _technical_section(sig: Signal) -> list[str]:
             L.append(f"   <code>Stack: {_htf_stack_compact(sig.htf_bias_all)}</code>")
         L.append("")
 
-    # Confluence — rinci per komponen
     confluences: list[str] = []
 
     if sig.pattern_names:
@@ -155,7 +154,6 @@ def _technical_section(sig: Signal) -> list[str]:
         fib_clean = fib_clean.replace('FIB_STRONG', 'Strong').replace('FIB_NEAR', 'Near').replace('FIB_GOLD', 'Golden')
         confluences.append(f"✓ <b>Fibonacci</b>: {fib_clean}")
 
-    # SNR — tampilkan tipe level, harga, kekuatan (touch count)
     if sig.snr_detail:
         if "SNR_OK" in sig.snr_detail or "SNR_WEAK" in sig.snr_detail:
             quality = "✓" if "SNR_OK" in sig.snr_detail else "~"
@@ -177,7 +175,6 @@ def _technical_section(sig: Signal) -> list[str]:
         elif "SNR_BLOCKED" in sig.snr_detail:
             confluences.append("✗ <b>S/R</b>: blocked (jalan terhalang)")
 
-    # SND — Supply/Demand zone
     if sig.snd_detail:
         zone_type = "Demand" if sig.direction == "BUY" else "Supply"
         price_match = re.search(r'([0-9.]+)-([0-9.]+)', sig.snd_detail)
@@ -189,18 +186,15 @@ def _technical_section(sig: Signal) -> list[str]:
     if sig.divergence_detail:
         confluences.append(f"✓ <b>Divergence</b>: {sig.divergence_detail}")
 
-    # Liquidity Sweep — entry-timing scalping
     if sig.sweep_detail:
         confluences.append(f"✓ <b>Liquidity Sweep</b>: {sig.sweep_detail}")
 
-    # FVG — entry-timing scalping
     if sig.fvg_detail:
         fvg_disp = sig.fvg_detail
         if fvg_disp.startswith("FVG_OK("):
             fvg_disp = fvg_disp[len("FVG_OK("):-1]
         confluences.append(f"✓ <b>FVG</b>: {fvg_disp}")
 
-    # Trigger komponen (EMA, RSI, MACD, Candle) — ringkas dari trigger_notes
     if sig.trigger_notes:
         trigger_parts: list[str] = []
         notes = sig.trigger_notes.split()
@@ -224,7 +218,6 @@ def _technical_section(sig: Signal) -> list[str]:
             L.append(f"   {c}")
         L.append("")
 
-    # Session, ATR, Trigger strength
     info: list[str] = []
     if sig.session_name:
         sess_emoji = {"asian": "🌅", "london": "🇬🇧", "new york": "🗽",
@@ -352,7 +345,6 @@ def _format_live(sig: Signal, signal_id: str, signal_mode: str) -> str:
     L.append("")
     L.append("─────────────────────")
     
-    # Footer (tanpa duplikasi direction)
     if sig.reason and sig.reason.strip():
         L.append(f"💡 <i>{sig.reason}</i>")
         L.append("")

@@ -16,14 +16,10 @@ class FvgConfig:
     max_age_bars: int     # gap lebih tua dari ini diabaikan
 
 
-# Scalping (M5/M15): gap kecil-kecil, umur pendek lebih relevan.
-# 2026-09-24 dilonggarkan (gap 0.5->0.3 ATR, age 40->60, radius 1.0->1.5x ATR):
-# detector lama nyaris tak pernah trigger (FVG_OK 0% dari 143 sinyal scalping).
 _FVG_SCALPING = FvgConfig(min_gap_atr=0.3, max_age_bars=60)
-# Intraday (H1): cadangan — komponen ini di-skip total untuk intraday di _confluence_score.
 _FVG_INTRADAY = FvgConfig(min_gap_atr=0.4, max_age_bars=100)
 
-_NEAR_ENTRY_ATR = 1.5   # radius "dekat entry" (×ATR) untuk zona valid (1.0->1.5)
+_NEAR_ENTRY_ATR = 1.5   # radius "dekat entry" (×ATR) untuk zona valid
 
 
 def _atr_of(df: pd.DataFrame) -> float:
@@ -78,7 +74,7 @@ def detect_fvg_zones(df: pd.DataFrame, cfg: FvgConfig) -> list[dict]:
         if age > cfg.max_age_bars:
             continue
 
-        # Mitigasi: ada candle setelah formasi yang menyentuh (overlap) gap.
+        # Mitigasi: ada candle setelah formasi yang menyentuh (overlap) gap
         filled = False
         for j in range(i + 1, n):
             if highs[j] >= gap_bot and lows[j] <= gap_top:
@@ -141,8 +137,7 @@ def fvg_confluence_score(
                    f"dist={abs(entry_price - closest['mid']):.1f})")
 
     best = max(near_cands, key=lambda z: (z["strength"], -abs(entry_price - z["mid"])))
-    # Prefiks FVG_OK (konsisten SWEEP_OK/SNR_OK) wajib agar fvg_detail terbaca
-    # _COMP_KEYWORDS di signal_logger.get_stats(); tanpa ini data tak pernah dihitung.
+    # Prefiks FVG_OK wajib agar fvg_detail terbaca _COMP_KEYWORDS di signal_logger.get_stats()
     return 1, (f"FVG_OK({best['type']}({best['bottom']:.2f}-{best['top']:.2f} "
                f"gap={best['gap_size'] / atr:.1f}A age={best['age_bars']}b "
                f"str={best['strength']}))")

@@ -74,13 +74,9 @@ class Settings:
     cooldown_bars:        int
     atr_min_pct:          float
 
-    # Market Transition (ADX) gate — ADX < block → continuation diblokir;
-    # ADX < gray → confluence +1 (soft, bukan block)
     market_transition_adx_block: float
     market_transition_adx_gray:  float
 
-    # HTF bias vote — dari data historis (2026-09-17): scalping cukup vote H1
-    # (H4 tak menolong WR); intraday wajib D1 sebagai top-down penuh.
     scalping_h1_only:     bool
     intraday_require_d1:  bool
 
@@ -117,30 +113,27 @@ class Settings:
     # Scalping
     scalping_min_trigger_score:    int
     scalping_min_confluence_score: int
-    scalping_atr_min_points:       float  # ATR minimum absolut untuk scalping (poin)
+    scalping_atr_min_points:       float
     scalping_sl_atr_mult:          float
-    scalping_cooldown_bars:        int   # fallback jika TF-specific tidak ada
-    scalping_cooldown_bars_m5:     int   # cooldown khusus M5
-    scalping_cooldown_bars_m15:    int   # cooldown khusus M15
+    scalping_cooldown_bars:        int
+    scalping_cooldown_bars_m5:     int
+    scalping_cooldown_bars_m15:    int
     scalping_tp1_rr:               float
     scalping_tp2_rr:               float
     scalping_tp3_rr:               float
-    scalping_tp1_atr_mult:         float  # >0 → TP1 scalping = kelipatan ATR (off → ladder RR)
+    scalping_tp1_atr_mult:         float
     scalping_min_rr:               float
-    # Min RR terpisah agar scalping CT tak memakai min_rr intraday (1.1)
-    # yang lebih tinggi dari tp1_rr (0.7) → selalu reject
+    # Scalping CT min RR terpisah dari intraday
     scalping_counter_trend_min_rr: float
-    scalping_overextend_atr_mult:  float  # guard anti-chase: enter terlalu jauh dari EMA20 % ATR
-    scalping_pullback_enabled:     bool   # mode pullback/rebound scalping (opsional, tambahan)
-    # Konfluensi scalping entry-timing — default logging-only; aktifkan hanya setelah validasi akurasi.
-    scalping_sweep_enabled:        bool   # liquidity sweep ikut skor scalping
-    scalping_fvg_enabled:          bool   # FVG ikut skor scalping
-    # Market State Detector (2026-09-24) — adaptasi logic terhadap kondisi pasar.
-    momentum_ema200_tolerance:     float  # jalur momentum: lebar band EMA200 (×ATR)
-    range_rejection_enabled:       bool   # RANGE lane: rejection di level kunci
+    scalping_overextend_atr_mult:  float
+    scalping_pullback_enabled:     bool
+    scalping_sweep_enabled:        bool
+    scalping_fvg_enabled:          bool
+    momentum_ema200_tolerance:     float
+    range_rejection_enabled:       bool
 
-    # === Tuas keketatan/reaksi (A/B testing tanpa ubah kode) ===
-    ltf_veto_enabled:              bool   # master switch jalur VETO + FLIP (LTF berbalik)
+    # Tuas keketatan
+    ltf_veto_enabled:              bool
     flip_min_trigger:              int    # FLIP wajib trigger >= nilai ini (3 ketat / 2 longgar+struktur)
     flip_require_key_level:        bool   # FLIP wajib key level (SnR/SnD)
     h1_require_key_level:          bool   # H1 wajib key level
@@ -178,7 +171,6 @@ def load_settings() -> Settings:
         cooldown_bars        = _geti("COOLDOWN_BARS",         3),
         atr_min_pct          = _getf("ATR_MIN_PCT",           0.0006),
 
-        # Rileks dari 18/23 → 15/25: jangan blokir awal tren (ADX rendah = tren baru mulai).
         market_transition_adx_block = _getf("MARKET_TRANSITION_ADX_BLOCK", 15.0),
         market_transition_adx_gray  = _getf("MARKET_TRANSITION_ADX_GRAY",  25.0),
 
@@ -215,14 +207,9 @@ def load_settings() -> Settings:
 
         scalping_min_trigger_score    = _geti("SCALPING_MIN_TRIGGER_SCORE",    3),
         scalping_min_confluence_score = _geti("SCALPING_MIN_CONFLUENCE_SCORE", 2),
-        # 2026-09-24 dilihat dr data: ATR gate 5.0pt memblokir 50-75% candle M5
-        # di hari tenang (sinyal mati). Diturunkan ke 3.0 — relatif atr_min_pct
-        # (0.0006×harga ≈ 2.6pt) tetap efektif utk menolak pasar ultra-flat.
         scalping_atr_min_points       = _getf("SCALPING_ATR_MIN_POINTS",       3.0),
         scalping_sl_atr_mult          = _getf("SCALPING_SL_ATR_MULT",          1.2),
         scalping_cooldown_bars        = _geti("SCALPING_COOLDOWN_BARS",        5),
-        # M5 lockout 9 bar (45mnt) terbukti jadi reject #1 akumulasi (19.9%) —
-        # diturunkan ke 6 bar (30 mnt) utk perbaiki responsivitas scalping.
         scalping_cooldown_bars_m5     = _geti("SCALPING_COOLDOWN_BARS_M5",     6),
         scalping_cooldown_bars_m15    = _geti("SCALPING_COOLDOWN_BARS_M15",    5),
 scalping_tp1_rr               = _getf("SCALPING_TP1_RR",               0.7),
@@ -230,17 +217,13 @@ scalping_tp1_rr               = _getf("SCALPING_TP1_RR",               0.7),
         scalping_tp3_rr               = _getf("SCALPING_TP3_RR",               1.3),
         scalping_tp1_atr_mult         = _getf("SCALPING_TP1_ATR_MULT",         0.0),
         scalping_min_rr               = _getf("SCALPING_MIN_RR",               1.0),
-        # Gate RR dicabut (TP proporsional SL → rr tetap); penggantinya: OVEREXTENSION
-        # guard (anti-chase) di engine + cap SL 10pt.
         scalping_counter_trend_min_rr = _getf("SCALPING_COUNTER_TREND_MIN_RR", 1.5),
         scalping_overextend_atr_mult  = _getf("SCALPING_OVEREXTEND_ATR_MULT",  1.2),
         scalping_pullback_enabled     = _getb("SCALPING_PULLBACK_ENABLED",     False),
         scalping_sweep_enabled        = _getb("SCALPING_LIQUIDITY_SWEEP_ENABLED", False),
         scalping_fvg_enabled          = _getb("SCALPING_FVG_ENABLED",            False),
-        # Market State Detector (2026-09-24)
         momentum_ema200_tolerance     = _getf("MOMENTUM_EMA200_TOLERANCE",       1.0),
         range_rejection_enabled       = _getb("RANGE_REJECTION_ENABLED",         True),
-        # Tuas keketatan/reaksi (A/B testing tanpa ubah kode)
         ltf_veto_enabled              = _getb("LTF_VETO_ENABLED",                True),
         flip_min_trigger              = _geti("FLIP_MIN_TRIGGER",                3),
         flip_require_key_level        = _getb("FLIP_REQUIRE_KEY_LEVEL",          True),
