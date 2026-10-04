@@ -338,34 +338,31 @@ def evaluate_any_tf_mta(
     if direction == "BUY" and price_now < _ez_bot:
         _reject(df_t, f"ZONE_PASSED(price={price_now:.2f}<bot={_ez_bot:.2f})"); return None
 
-    # GATE 4 — SL/TP
-    eff_tp1_rr = scalping_tp1_rr if is_scalping else tp1_rr
-    eff_tp2_rr = scalping_tp2_rr if is_scalping else tp2_rr
-    eff_tp3_rr = scalping_tp3_rr if is_scalping else tp3_rr
+    # ATR Spike Filter: reject jika ATR melonjak (> 2× median 100 periode)
+    if "atr_14" not in df_t.columns or len(df_t) < 102:
+        _reject(df_t, "ATR_DATA_INSUFFICIENT")
+        return None
+    atr_window = df_t["atr_14"].iloc[-101:-1]
+    n_valid = int(atr_window.notna().sum())
+    if n_valid < 50:
+        _reject(df_t, "ATR_DATA_INSUFFICIENT")
+        return None
+    atr_baseline = atr_window.median()
+    if atr_baseline > 0 and atr > 2.0 * atr_baseline:
+        _reject(df_t, "ATR_SPIKE")
+        return None
 
-    if is_scalping:
-        plan = swing_based_sltp(
-            direction=direction, price_now=price_now, df=df_t, atr=atr,
-            is_scalping=True, tp1_rr=eff_tp1_rr, tp2_rr=eff_tp2_rr, tp3_rr=eff_tp3_rr,
-            max_sl=max_sl_points, sl_atr_mult_override=scalping_sl_atr_mult,
-            tp1_atr_mult_override=scalping_tp1_atr_mult,
-        )
-        if plan is None:
-            plan = dynamic_atr_sltp(
-                direction=direction, price_now=price_now, atr=atr,
-                is_scalping=True, tp1_rr=eff_tp1_rr, tp2_rr=eff_tp2_rr, tp3_rr=eff_tp3_rr,
-                max_sl=max_sl_points, df=df_t, sl_atr_mult_override=scalping_sl_atr_mult,
-                tp1_atr_mult_override=scalping_tp1_atr_mult,
-            )
-        sl_method = "swing" if (plan is not None and "Swing" in (plan.method or "")) else "dynamic_atr"
-    else:
-        plan = dynamic_atr_sltp(
-            direction=direction, price_now=price_now, atr=atr,
-            is_scalping=False, tp1_rr=eff_tp1_rr, tp2_rr=eff_tp2_rr, tp3_rr=eff_tp3_rr,
-            max_sl=max_sl_points, df=df_t, data_by_tf=data_by_tf,
-            sl_atr_mult_override=sl_atr_mult,
-        )
-        sl_method = "dynamic_atr"
+    # GATE 4 — SL/TP (Pure ATR-based system)
+    spread = settings.spread
+    plan = swing_based_sltp(
+        direction=direction, price_now=price_now, df=df_t, atr=atr,
+        spread=spread, is_scalping=is_scalping,
+    )
+    
+    if plan is not None and plan.reject_reason:
+        _reject(df_t, plan.reject_reason)
+        return None
+    
     if plan is None:
         plan = fixed_zone_sltp(
             direction=direction, price_now=price_now,
@@ -373,11 +370,16 @@ def evaluate_any_tf_mta(
             tp1_pips=tp1_pips, tp2_pips=tp2_pips, tp3_pips=tp3_pips,
             pip_size=pip_size,
         )
-        sl_method = "fixed"
+        sl_method = "fixed_fallback"
+    else:
+        sl_method = plan.sl_source
+    
     if plan is None:
-        _reject(df_t, "SLTP_NONE"); return None
+        _reject(df_t, "SLTP_NONE")
+        return None
 
     # GATE 5 — Confluence
+    eff_tp1_rr = plan.rr_tp1
     conf_score, conf_notes, conf_detail = _confluence_score(
         df=df_t, direction=direction, entry=price_now, atr=atr,
         tf=trigger_tf, is_scalping=is_scalping, sl=float(plan.sl),

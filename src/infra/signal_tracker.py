@@ -36,7 +36,9 @@ class TrackedSignal:
     tp2_hit:    bool = False
     tp3_hit:    bool = False
     resolved:   bool = False
-    breakeven_sl: float | None = None  # SL digeser ke breakeven setelah TP1 kena
+    breakeven_sl: float | None = None
+    trailing_sl:  float | None = None
+    spread:       float = 0.30
 
 
 class SignalTracker:
@@ -112,6 +114,7 @@ class SignalTracker:
             atr_value   = atr_value,
             is_setup_plan   = is_setup,
             entry_zone_hit  = entry_zone_hit,
+            spread      = float(rec.get("spread", 0.3) or 0.3),
         )
         with self._lock:
             self._active[sid] = ts
@@ -221,8 +224,14 @@ class SignalTracker:
                     self._resolve(ts, "CANCELLED", check_price, now, "SL_BEFORE_ENTRY")
                 return  # belum masuk zona, belum monitor TP
 
-        # SL efektif = breakeven jika TP1 sudah kena
-        effective_sl = ts.breakeven_sl if ts.breakeven_sl is not None else ts.sl
+        # SL efektif = trailing > breakeven > original
+        if ts.trailing_sl is not None:
+            effective_sl = ts.trailing_sl
+        elif ts.breakeven_sl is not None:
+            effective_sl = ts.breakeven_sl
+        else:
+            effective_sl = ts.sl
+        
         sl_hit = (is_buy and check_price <= effective_sl) or \
                  (not is_buy and check_price >= effective_sl)
 
@@ -236,11 +245,16 @@ class SignalTracker:
                 self._logger.update_hit_time(ts.signal_id, "tp1", now.strftime("%Y-%m-%dT%H:%M:%S"))
                 self._send_tp_notify("🎯 <b>TP1 TERCAPAI</b>", ts.signal_id, check_price)
 
-                # Breakeven: posisi sisa tak bisa rugi meski harga balik
-                ts.breakeven_sl = ts.entry
+                # Breakeven: SL ke entry + spread (hindari keluar rugi kecil)
+                is_buy = ts.direction == "BUY"
+                if is_buy:
+                    ts.breakeven_sl = ts.entry + ts.spread
+                else:
+                    ts.breakeven_sl = ts.entry - ts.spread
+                
                 logger.info(
                     f"[TRACKER] Breakeven aktif | {ts.signal_id} | "
-                    f"SL lama={ts.sl:.2f} → SL baru={ts.breakeven_sl:.2f} (entry)"
+                    f"SL lama={ts.sl:.2f} → BE={ts.breakeven_sl:.2f} (entry + spread)"
                 )
 
                 if not ts.tp2:
@@ -252,6 +266,14 @@ class SignalTracker:
                 ts.tp2_hit = True
                 self._logger.update_hit_time(ts.signal_id, "tp2", now.strftime("%Y-%m-%dT%H:%M:%S"))
                 self._send_tp_notify("🎯🎯 <b>TP2 TERCAPAI</b>", ts.signal_id, check_price)
+                
+                # Trailing: SL ke TP1 (lock profit 1.0R untuk posisi tersisa)
+                ts.trailing_sl = ts.tp1
+                logger.info(
+                    f"[TRACKER] Trailing aktif | {ts.signal_id} | "
+                    f"SL → TP1={ts.trailing_sl:.2f} (lock 1.0R)"
+                )
+                
                 if not ts.tp3:
                     self._resolve(ts, "WIN_TP2", check_price, now)
                     return
@@ -260,14 +282,17 @@ class SignalTracker:
             if (is_buy and check_price >= ts.tp3) or (not is_buy and check_price <= ts.tp3):
                 ts.tp3_hit = True
                 self._logger.update_hit_time(ts.signal_id, "tp3", now.strftime("%Y-%m-%dT%H:%M:%S"))
-                self._send_tp_notify("🎯🎯🎯 <b>TP3 TERCAPAI — FULL TARGET!</b>", ts.signal_id, check_price)
+                self._send_tp_notify("TP3 TERCAPAI — FULL TARGET!", ts.signal_id, check_price)
                 self._resolve(ts, "WIN_TP3", check_price, now)
                 return
 
+        # SL hit setelah TP1/TP2 kena (fallback jika harga balik)
         if ts.tp1_hit and not ts.tp2_hit and sl_hit:
             self._resolve(ts, "WIN_TP1", check_price, now)
+            return
         elif ts.tp2_hit and not ts.tp3_hit and sl_hit:
             self._resolve(ts, "WIN_TP2", check_price, now)
+            return
 
     def _send_tp_notify(self, header: str, signal_id: str, price: float) -> None:
         """Kirim notif TP hanya untuk sinyal baru (bukan dari startup), langsung tanpa blocking."""

@@ -50,6 +50,9 @@ _CATEGORY: dict[str, str] = {
     "SL_TOO_WIDE":        "RR_FAIL",
     "ATR_TOO_LOW":        "ATR_RENDAH",
     "ATR_INVALID":        "ATR_RENDAH",
+    "ATR_SPIKE":          "ATR_SPIKE",
+    "ATR_DATA_INSUFFICIENT": "DATA_KURANG",
+    "TP_ORDER_INVALID":   "SLTP_ERROR",
     "NEWS_SPIKE_SKIP":    "NEWS_SPIKE",
     "NOT_ENOUGH_BARS":    "DATA_KURANG",
     "COOLDOWN":           "COOLDOWN",
@@ -66,6 +69,8 @@ _CATEGORY: dict[str, str] = {
     "RANGE_QUALITY_NO_KEY_LEVEL": "RANGE_QUALITY",
     "MOM_RECOVERY_NO_LEVEL": "MOM_RECOVERY_NO_LEVEL",
     "RANGE_NO_REJECTION":    "RANGE_NO_REJECTION",
+    "SL_OUT_OF_BOUNDS":      "SL_OUT_OF_BOUNDS",
+    "SL_TOO_TIGHT":          "SL_TOO_TIGHT",
 }
 
 # Hint tuning per kategori dominan
@@ -159,7 +164,34 @@ _HINT: dict[str, str] = {
     "RANGE_NO_REJECTION": (
         "RANGE lane: skor rejection kurang (butuh 3/3: candle rejection + RSI + MACD). "
         "Kasus 30/09 17:50 M5 LOSS: skor 2/3. WIN 12:50 skor 3/3. "
-        "Ini filter yang benar â€” RANGE hanya valid jika ketiga indikator setuju."
+        "Ini filter yang benar — RANGE hanya valid jika ketiga indikator setuju."
+    ),
+    "SL_OUT_OF_BOUNDS": (
+        "SL hasil perhitungan ATR melampaui batas maksimum (scalping 2×ATR, intraday 2.5×ATR). "
+        "Pasar terlalu volatile atau swing point terlalu jauh — risiko per trade tidak layak. "
+        "Tuning: naikkan SCALPING_MAX_ATR_MULT/INTRADAY_MAX_ATR_MULT jika sering terjadi."
+    ),
+    "SL_TOO_TIGHT": (
+        "SL hasil perhitungan kurang dari minimum (scalping 3×spread, intraday 5×spread). "
+        "Entry terlalu dekat swing point atau ATR sangat rendah — rawan stop-hunt. "
+        "Ini proteksi yang benar — jangan dilemahkan kecuali spread broker terlalu lebar."
+    ),
+    "ATR_SPIKE": (
+        "ATR melonjak lebih dari 2× median 100 periode — kemungkinan spike news atau volatilitas abnormal. "
+        "Clamp maksimum SL ikut membesar dengan ATR, sehingga reject ini mencegah SL terlalu lebar. "
+        "Filter ini melindungi modal saat pasar tidak stabil. Jika terlalu sering, cek apakah ada news rutin atau "
+        "turunkan threshold dari 2.0× ke 1.8×."
+    ),
+    "ATR_DATA_INSUFFICIENT": (
+        "Data ATR tidak cukup untuk menjalankan spike filter: kurang dari 102 bar atau lebih dari 50% NaN "
+        "dalam 100 periode terakhir. Sinyal ditolak karena filter keamanan tidak bisa divalidasi. "
+        "Pastikan BARS >= 200 di .env dan kolom atr_14 terisi penuh sejak warmup."
+    ),
+    "TP_ORDER_INVALID": (
+        "Urutan TP tidak valid setelah obstacle adjustment: tp1 < tp2 < tp3 tidak terpenuhi, "
+        "atau jarak antar TP kurang dari 0.3R (30% sl_dist). "
+        "Biasanya terjadi saat OBSTACLE_MIN_RR_FRAC terlalu rendah atau obstacle sangat berdekatan. "
+        "Sinyal ditolak agar backtest tidak mencatat TP yang hampir identik sebagai target berbeda."
     ),
 }
 

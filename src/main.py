@@ -200,12 +200,17 @@ def main() -> None:
     )
     logger.info(
         f"PARAMS SCALPING | TP={s.scalping_tp1_rr}R/{s.scalping_tp2_rr}R/{s.scalping_tp3_rr}R "
-        f"SLM5<={s.max_sl_m5}pt SLM15<={s.max_sl_m15}pt ATR>={s.scalping_atr_min_points}pt "
+        f"SL_mult={s.scalping_sl_atr_mult}×ATR clamp=[{s.scalping_min_spread_mult}×spread, {s.scalping_max_atr_mult}×ATR] "
+        f"ATR>={s.scalping_atr_min_points}pt spread={s.spread}pt "
         f"OE>={s.scalping_overextend_atr_mult}×ATR "
         f"PB={'ON' if s.scalping_pullback_enabled else 'OFF'} "
         f"Sweep={'ON' if s.scalping_sweep_enabled else 'OFF'} FVG={'ON' if s.scalping_fvg_enabled else 'OFF'} "
         f"trig>={s.scalping_min_trigger_score} conf>={s.scalping_min_confluence_score} "
         f"cooldown M5={s.scalping_cooldown_bars_m5}bar M15={s.scalping_cooldown_bars_m15}bar"
+    )
+    logger.info(
+        f"PARAMS INTRADAY | TP={s.intraday_tp1_rr}R/{s.intraday_tp2_rr}R/{s.intraday_tp3_rr}R "
+        f"SL_mult={s.intraday_sl_atr_mult}×ATR clamp=[{s.intraday_min_spread_mult}×spread, {s.intraday_max_atr_mult}×ATR]"
     )
     logger.info(
         f"PARAMS GATES | VETO+FLIP={'ON' if s.ltf_veto_enabled else 'OFF'} "

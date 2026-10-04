@@ -80,7 +80,7 @@ class Settings:
     scalping_h1_only:     bool
     intraday_require_d1:  bool
 
-    # SL/TP ATR-based
+    # SL/TP ATR-based (DEPRECATED, legacy intraday)
     sl_atr_mult:   float
     tp1_rr:        float
     tp2_rr:        float
@@ -93,6 +93,22 @@ class Settings:
     tp2_pips: float
     tp3_pips: float
     pip_size: float
+
+    # Pure ATR-based SL/TP (NEW)
+    spread:                    float
+    scalping_atr_len:          int
+    scalping_sl_buffer_atr:    float
+    scalping_min_spread_mult:  float
+    scalping_max_atr_mult:     float
+    intraday_atr_len:          int
+    intraday_sl_atr_mult:      float
+    intraday_sl_buffer_atr:    float
+    intraday_min_spread_mult:  float
+    intraday_max_atr_mult:     float
+    intraday_tp1_rr:           float
+    intraday_tp2_rr:           float
+    intraday_tp3_rr:           float
+    obstacle_min_rr_frac:      float
 
     # Session filter
     session_filter: bool
@@ -149,7 +165,7 @@ def load_settings() -> Settings:
     if mt5_login <= 0:
         raise ValueError("Env var wajib tidak valid: MT5_LOGIN harus berupa angka positif")
 
-    return Settings(
+    s = Settings(
         mt5_login         = mt5_login,
         mt5_password      = _get("MT5_PASSWORD"),
         mt5_server        = _get("MT5_SERVER"),
@@ -189,6 +205,21 @@ def load_settings() -> Settings:
         tp3_pips = _getf("TP3_PIPS",  140.0),
         pip_size = _getf("PIP_SIZE",    0.1),
 
+        spread                    = _getf("SPREAD",                    0.30),
+        scalping_atr_len          = _geti("SCALPING_ATR_LEN",          14),
+        scalping_sl_buffer_atr    = _getf("SCALPING_SL_BUFFER_ATR",    0.3),
+        scalping_min_spread_mult  = _getf("SCALPING_MIN_SPREAD_MULT",  3.0),
+        scalping_max_atr_mult     = _getf("SCALPING_MAX_ATR_MULT",     2.0),
+        intraday_atr_len          = _geti("INTRADAY_ATR_LEN",          14),
+        intraday_sl_atr_mult      = _getf("INTRADAY_SL_ATR_MULT",      1.5),
+        intraday_sl_buffer_atr    = _getf("INTRADAY_SL_BUFFER_ATR",    0.5),
+        intraday_min_spread_mult  = _getf("INTRADAY_MIN_SPREAD_MULT",  5.0),
+        intraday_max_atr_mult     = _getf("INTRADAY_MAX_ATR_MULT",     2.5),
+        intraday_tp1_rr           = _getf("INTRADAY_TP1_RR",           1.0),
+        intraday_tp2_rr           = _getf("INTRADAY_TP2_RR",           2.0),
+        intraday_tp3_rr           = _getf("INTRADAY_TP3_RR",           3.0),
+        obstacle_min_rr_frac      = _getf("OBSTACLE_MIN_RR_FRAC",      0.8),
+
         session_filter = _getb("SESSION_FILTER", True),
 
         counter_trend_enabled  = _getb("COUNTER_TREND_ENABLED",  True),
@@ -212,9 +243,9 @@ def load_settings() -> Settings:
         scalping_cooldown_bars        = _geti("SCALPING_COOLDOWN_BARS",        5),
         scalping_cooldown_bars_m5     = _geti("SCALPING_COOLDOWN_BARS_M5",     6),
         scalping_cooldown_bars_m15    = _geti("SCALPING_COOLDOWN_BARS_M15",    5),
-scalping_tp1_rr               = _getf("SCALPING_TP1_RR",               0.7),
-        scalping_tp2_rr               = _getf("SCALPING_TP2_RR",               1.0),
-        scalping_tp3_rr               = _getf("SCALPING_TP3_RR",               1.3),
+        scalping_tp1_rr               = _getf("SCALPING_TP1_RR",               1.0),
+        scalping_tp2_rr               = _getf("SCALPING_TP2_RR",               1.5),
+        scalping_tp3_rr               = _getf("SCALPING_TP3_RR",               2.0),
         scalping_tp1_atr_mult         = _getf("SCALPING_TP1_ATR_MULT",         0.0),
         scalping_min_rr               = _getf("SCALPING_MIN_RR",               1.0),
         scalping_counter_trend_min_rr = _getf("SCALPING_COUNTER_TREND_MIN_RR", 1.5),
@@ -231,3 +262,32 @@ scalping_tp1_rr               = _getf("SCALPING_TP1_RR",               0.7),
         scalping_pullback_min_trigger = _geti("SCALPING_PULLBACK_MIN_TRIGGER",    2),
         range_quality_key_level       = _getb("RANGE_QUALITY_KEY_LEVEL",          True),
     )
+    
+    scal_tp1 = _getf("SCALPING_TP1_RR", 1.0)
+    scal_tp2 = _getf("SCALPING_TP2_RR", 1.5)
+    scal_tp3 = _getf("SCALPING_TP3_RR", 2.0)
+    intra_tp1 = s.intraday_tp1_rr
+    intra_tp2 = s.intraday_tp2_rr
+    intra_tp3 = s.intraday_tp3_rr
+    obs_frac = s.obstacle_min_rr_frac
+    
+    if obs_frac <= 0.75:
+        raise ValueError(
+            f"OBSTACLE_MIN_RR_FRAC={obs_frac:.2f} terlalu rendah. "
+            f"Untuk scalping (TP 1.0/1.5/2.0R), min_rr harus > 0.75 (0.75×1.5=1.125 < 1.0). "
+            f"Untuk intraday (TP 1.0/2.0/3.0R), min_rr harus > 0.67. "
+            f"Nilai rendah menyebabkan TP collision (tp2_adjusted == tp3_adjusted). "
+            f"Gunakan >= 0.8 (default)."
+        )
+    
+    if not (scal_tp1 < scal_tp2 < scal_tp3):
+        raise ValueError(
+            f"SCALPING TP order salah: TP1={scal_tp1} < TP2={scal_tp2} < TP3={scal_tp3} harus strict ascending"
+        )
+    
+    if not (intra_tp1 < intra_tp2 < intra_tp3):
+        raise ValueError(
+            f"INTRADAY TP order salah: TP1={intra_tp1} < TP2={intra_tp2} < TP3={intra_tp3} harus strict ascending"
+        )
+    
+    return s
