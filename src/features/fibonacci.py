@@ -1,4 +1,4 @@
-﻿"""fibonacci.py â€” Fibonacci Retracement untuk XAU/USD."""
+﻿"""fibonacci.py — Fibonacci Retracement untuk XAU/USD."""
 from __future__ import annotations
 
 from dataclasses import dataclass

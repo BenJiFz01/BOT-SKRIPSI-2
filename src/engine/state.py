@@ -1,4 +1,4 @@
-﻿"""â”€ Market condition detector & Market State (pemilih jalur entry)."""
+﻿"""— Market condition detector & Market State (pemilih jalur entry)."""
 
 from __future__ import annotations
 
@@ -10,7 +10,7 @@ from src.features.entry_setup import classify_entry_setup
 
 
 def detect_market_condition(df: pd.DataFrame, atr_period: int = 20) -> str:
-    """Deteksi market: volatile (ATR >1.5Ã—rata2), sideways (ADX<20 atau ATR <0.7Ã—rata2), else normal."""
+    """Deteksi market: volatile (ATR >1.5×rata2), sideways (ADX<20 atau ATR <0.7×rata2), else normal."""
     col = "atr_14" if "atr_14" in df.columns else None
     if col is None or len(df) < atr_period + 3:
         return "normal"
@@ -43,7 +43,7 @@ def _decisive_adx(
     block: float,
     gray: float,
 ) -> tuple[str | None, int]:
-    """ADX TF penentu tren (H1 utk M5/M15, H4 utk H1): <block â†’ block; block..gray â†’ +1 confluence."""
+    """ADX TF penentu tren (H1 utk M5/M15, H4 utk H1): <block → block; block..gray → +1 confluence."""
     _dec_tf, _dec_adx = _decisive_adx_value(trigger_tf, data_by_tf)
     if _dec_adx is None:
         return None, 0
@@ -92,7 +92,7 @@ def _momentum_streak(df: pd.DataFrame, direction: str, atr: float) -> int:
 
 
 def _impulse_atr(df: pd.DataFrame, direction: str, atr: float) -> float:
-    """Jarak close terakhir dari low/high 20-bar (dalam ATR) â€” kekuatan impuls."""
+    """Jarak close terakhir dari low/high 20-bar (dalam ATR) — kekuatan impuls."""
     if len(df) < 22 or atr <= 0:
         return 0.0
     close = _safe(df.iloc[-2], "close")
@@ -112,15 +112,15 @@ def _market_state(
     adx_block:        float,
     adx_gray:         float,
 ) -> tuple[str, str]:
-    """Market State Detector â€” klasifikasi kondisi pasar untuk dispatch logic.
+    """Market State Detector — klasifikasi kondisi pasar untuk dispatch logic.
 
     Return (state, note) dengan prioritas:
       TRANSITION > BREAKOUT > HIGH_MOMENTUM > TREND_BULL/BEAR > RANGE > CLEAN.
     Basis: ADX penentu (H1 utk M5/M15, H4 utk H1) + bias TF sinyal + streak momentum +
-    probe breakout + ekspansi ATR. Murni klasifikasi â€” GATE & threshold menyesuaikan di
+    probe breakout + ekspansi ATR. Murni klasifikasi — GATE & threshold menyesuaikan di
     pemanggil, fungsi ini TIDAK meloloskan/menolak sinyal.
 
-    Dispatcher engine menukar jalur entry per state (CLEAN â†’ pakai perilaku lama).
+    Dispatcher engine menukar jalur entry per state (CLEAN → pakai perilaku lama).
     """
     dec_tf, dec_adx = _decisive_adx_value(trigger_tf, data_by_tf)
     atr   = _atr_proxy(df)
@@ -162,7 +162,7 @@ def _market_state(
     _imp    = _impulse_atr(df, direction, atr)
     notes.append(f"streak={_streak},imp={_imp:.2f}")
 
-    # HIGH_MOMENTUM: tren terkonfirmasi + dorongan kuat (streak â‰¥2 / impuls â‰¥1.8Ã—ATR)
+    # HIGH_MOMENTUM: tren terkonfirmasi + dorongan kuat (streak ≥2 / impuls ≥1.8×ATR)
     if dec_adx is not None and dec_adx >= adx_gray and (_streak >= 2 or _imp >= 1.8):
         _vol = detect_market_condition(df) == "volatile"
         notes.append(f"vol={_vol}")
@@ -185,9 +185,9 @@ def _ltf_counter_veto(
     """Veto defensif simetris: blokir sinyal searah bias HTF saat kaki momentum LTF
     berlawanan masih UTUH (bukan sekadar 1-2 candle noise).
 
-    SELL di-veto bila kaki bullish utuh: streak bullish â‰¥2 & impuls â‰¥1.5Ã—ATR &
+    SELL di-veto bila kaki bullish utuh: streak bullish ≥2 & impuls ≥1.5×ATR &
     close masih di atas EMA20. BUY simetris (kaki bearish utuh, close di bawah EMA20).
-    Kaki yang sudah patah (harga kembali di sisi entry) tidak di-veto â€” top/bottom
+    Kaki yang sudah patah (harga kembali di sisi entry) tidak di-veto — top/bottom
     yang sudah berbalik tetap boleh diambil.
     """
     if atr <= 0 or len(df) < 22:
