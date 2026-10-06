@@ -257,9 +257,10 @@ def calc_sltp(
         if sl_dist > sl_max:
             return SLTPlan(
                 entry_low=entry_low, entry_high=entry_high, sl=0, tp1=0, tp2=0, tp3=0,
-                method="REJECT", reject_reason="SL_OUT_OF_BOUNDS", atr_used=a, sl_dist=sl_dist,
+                method=f"REJECT {d}", reject_reason=f"SL_OUT_OF_BOUNDS(sl={sl_dist:.1f}/max={sl_max:.1f}/atr={a:.1f}/{sl_dist/a:.2f}x)",
+                atr_used=a, sl_dist=sl_dist, sl_source=sl_source,
             )
-        
+
         sl = round(entry_high - sl_dist, 5)
         
         if not (sl < entry_low < entry_high):
@@ -295,9 +296,10 @@ def calc_sltp(
         if sl_dist > sl_max:
             return SLTPlan(
                 entry_low=entry_low, entry_high=entry_high, sl=0, tp1=0, tp2=0, tp3=0,
-                method="REJECT", reject_reason="SL_OUT_OF_BOUNDS", atr_used=a, sl_dist=sl_dist,
+                method=f"REJECT {d}", reject_reason=f"SL_OUT_OF_BOUNDS(sl={sl_dist:.1f}/max={sl_max:.1f}/atr={a:.1f}/{sl_dist/a:.2f}x)",
+                atr_used=a, sl_dist=sl_dist, sl_source=sl_source,
             )
-        
+
         sl = round(entry_low + sl_dist, 5)
         
         if not (entry_low < entry_high < sl):

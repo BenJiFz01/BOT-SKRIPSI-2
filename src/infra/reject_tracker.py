@@ -1,7 +1,7 @@
-﻿"""reject_tracker.py â€” Tracking & summary rejection sinyal untuk monitoring.
+﻿"""reject_tracker.py — Tracking & summary rejection sinyal untuk monitoring.
 
 Cara pakai: RejectTracker().record(symbol, tf, reason, df) lalu
-maybe_print_summary() tiap loop â€” auto print summary 30 menit ke terminal.
+maybe_print_summary() tiap loop — auto print summary 30 menit ke terminal.
 """
 
 import re
@@ -30,7 +30,7 @@ def _safe(row: pd.Series, col: str) -> float | None:
 
 _SUMMARY_INTERVAL_MIN = 30
 
-# Kategori reject untuk grouping (raw reason prefix â†’ nama pendek)
+# Kategori reject untuk grouping (raw reason prefix → nama pendek)
 _CATEGORY: dict[str, str] = {
     "EMA200_WAJIB":       "EMA200_WAJIB",
     "TRIGGER_FAIL":       "TRIGGER_FAIL",
@@ -76,7 +76,7 @@ _CATEGORY: dict[str, str] = {
 # Hint tuning per kategori dominan
 _HINT: dict[str, str] = {
     "EMA200_WAJIB": (
-        "Harga sedang di sisi salah EMA200 LTF â€” kemungkinan koreksi dalam trend HTF. "
+        "Harga sedang di sisi salah EMA200 LTF — kemungkinan koreksi dalam trend HTF. "
         "Ini normal. Tunggu harga kembali di atas/bawah EMA200, atau cek apakah HTF bias masih valid."
     ),
     "BIAS_FAIL": (
@@ -86,7 +86,7 @@ _HINT: dict[str, str] = {
     ),
     "CONFLUENCE_FAIL": (
         "Zona entry tidak cukup terkonfirmasi (Fibonacci, S/R, Pattern, Divergence). "
-        "Tuning: kurangi MIN_CONFLUENCE_SCORE â€” tapi pastikan Fib masih ada untuk intraday. "
+        "Tuning: kurangi MIN_CONFLUENCE_SCORE — tapi pastikan Fib masih ada untuk intraday. "
         "Atau cek apakah harga sedang jauh dari level kunci."
     ),
     "TRIGGER_FAIL": (
@@ -95,12 +95,12 @@ _HINT: dict[str, str] = {
         "Tapi pastikan EMA200 dan RSI masih masuk akal."
     ),
     "RSI_EXTREME": (
-        "RSI overbought/oversold saat entry â€” harga sudah terlalu jauh bergerak. "
+        "RSI overbought/oversold saat entry — harga sudah terlalu jauh bergerak. "
         "Ini filter yang benar. Tunggu RSI kembali ke area normal sebelum entry."
     ),
     "CT_GAGAL": (
         "Counter trend tidak memenuhi syarat (CHoCH/Divergence/Fibonacci). "
-        "Counter trend memang jarang valid â€” ini expected."
+        "Counter trend memang jarang valid — ini expected."
     ),
     "RR_FAIL": (
         "Risk/Reward terlalu kecil atau SL terlalu lebar. "
@@ -109,57 +109,57 @@ _HINT: dict[str, str] = {
     ),
     "ATR_RENDAH": (
         "Volatilitas pasar terlalu rendah untuk entry. "
-        "Normal di sesi sepi (Asia malam). Tidak perlu tuning â€” tunggu pasar aktif."
+        "Normal di sesi sepi (Asia malam). Tidak perlu tuning — tunggu pasar aktif."
     ),
     "CANDLE_FAIL": (
         "Candle konfirmasi tidak mendukung arah sinyal. "
-        "Tuning: ini biasanya false negative kecil â€” bisa turunkan min_body dari 0.3x ke 0.2x ATR di evaluator.py."
+        "Tuning: ini biasanya false negative kecil — bisa turunkan min_body dari 0.3x ke 0.2x ATR di evaluator.py."
     ),
     "COOLDOWN":    "Cooldown normal antar sinyal. Tidak perlu tuning.",
-    "NEWS_SPIKE":  "Spike news â€” sistem sengaja skip. Benar.",
-    "DATA_KURANG": "Data bar belum cukup â€” tunggu lebih banyak candle terkumpul.",
-    "SLTP_ERROR":  "SL/TP gagal dihitung â€” kemungkinan data price bermasalah. Cek koneksi MT5.",
+    "NEWS_SPIKE":  "Spike news — sistem sengaja skip. Benar.",
+    "DATA_KURANG": "Data bar belum cukup — tunggu lebih banyak candle terkumpul.",
+    "SLTP_ERROR":  "SL/TP gagal dihitung — kemungkinan data price bermasalah. Cek koneksi MT5.",
     "OUT_OF_SESSION": (
         "Di luar jam sesi aktif (02:00-06:00 WIB). Normal di akhir malam/dini hari. "
-        "Tidak perlu tuning â€” bot akan aktif kembali saat sesi buka."
+        "Tidak perlu tuning — bot akan aktif kembali saat sesi buka."
     ),
     "LATE_ENTRY": (
-        "Harga sudah terlalu jauh dari candle trigger (>1.5Ã—ATR). "
+        "Harga sudah terlalu jauh dari candle trigger (>1.5×ATR). "
         "Entry yang 'chasing' rawan kena SL dari retracement wajar. "
-        "Ini filter yang benar â€” tidak perlu dilemahkan."
+        "Ini filter yang benar — tidak perlu dilemahkan."
     ),
     "ASIAN_GATE": (
         "Scalping di sesi Asian tanpa konfirmasi level SNR/SND kunci. "
-        "Sesuai desain â€” Asian lebih choppy, wajib ada level struktural. "
+        "Sesuai desain — Asian lebih choppy, wajib ada level struktural. "
         "Jika terlalu sering, pertimbangkan naikkan near_factor SNR/SND."
     ),
     "SNR_BLOCKED": (
         "Jalur ke TP terblokir level SNR, atau level SNR terlalu lemah (2-touch). "
-        "Ini filter kualitas yang benar â€” level 2-touch akurasi historis hanya 31.6%. "
+        "Ini filter kualitas yang benar — level 2-touch akurasi historis hanya 31.6%. "
         "Tidak perlu dilemahkan."
     ),
     "DAILY_LIMIT": (
-        "Circuit breaker aktif â€” terlalu banyak loss beruntun untuk symbol ini. "
+        "Circuit breaker aktif — terlalu banyak loss beruntun untuk symbol ini. "
         "Bot pause generate sinyal baru sampai ada WIN atau reset hari baru. "
         "Ini proteksi modal yang benar."
     ),
     "MARKET_TRANSITION": (
         "ADX di TF penentu bias (H1/H4) di bawah ambang block "
         "(MARKET_TRANSITION_ADX_BLOCK, default 15). "
-        "Sistem menunda Continuation signal sesuai PRD 'Range/Transition â†’ NO SIGNAL'. "
+        "Sistem menunda Continuation signal sesuai PRD 'Range/Transition → NO SIGNAL'. "
         "Jika terlalu sering, turunkan ambang block atau cek apakah D1 sudah beri bias."
     ),
     "RANGE_QUALITY": (
         "Pasar RANGE/sideways tanpa key level berkualitas (SnR 3-touch / FIB_GOLDEN) pada "
-        "jalur continuation â€” level 2-touch (SnR_WEAK) tak dihitung karena rawan stop-hunt. "
+        "jalur continuation — level 2-touch (SnR_WEAK) tak dihitung karena rawan stop-hunt. "
         "Kasus 30/09 12:00 LOSS dengan SnR_WEAK; semua WIN hari itu punya level 3-touch. "
         "Tuning: RANGE_QUALITY_KEY_LEVEL=false untuk melonggari."
     ),
     "MOM_RECOVERY_NO_LEVEL": (
         "Sinyal lewat jalur MOM_RECOVERY (H1 netral + impulse lokal) tapi TIDAK punya "
-        "level dekat entry (SnR/SnD/FIB_GOLDEN) â€” entry melayang tanpa pijakan. "
+        "level dekat entry (SnR/SnD/FIB_GOLDEN) — entry melayang tanpa pijakan. "
         "Kasus 30/09 16:00 M15 LOSS: SNR_FAR 25pt. "
-        "Ini filter yang benar â€” MOM_RECOVERY butuh level sebagai anchor."
+        "Ini filter yang benar — MOM_RECOVERY butuh level sebagai anchor."
     ),
     "RANGE_NO_REJECTION": (
         "RANGE lane: skor rejection kurang (butuh 3/3: candle rejection + RSI + MACD). "
@@ -207,7 +207,7 @@ def _categorize(raw: str) -> str:
 
 def _extract_context(raw: str, df: pd.DataFrame | None) -> str:
     """Ekstrak konteks dari raw reason + df untuk baris log per-TF.
-    Contoh: "close=4395.2 EMA200=4412.8 gap=17.6pts (1.1Ã—ATR)" / "skor=1/2".
+    Contoh: "close=4395.2 EMA200=4412.8 gap=17.6pts (1.1×ATR)" / "skor=1/2".
     """
     raw_up = raw.upper()
 
@@ -242,12 +242,12 @@ def _extract_context(raw: str, df: pd.DataFrame | None) -> str:
         m_sc = re.search(r"score=(\d+/\d+)", raw)
         if m_sc:
             parts.append(f"skor={m_sc.group(1)}")
-        # Ambil komponen dari dalam [...] â€” strip semua kurung dan isinya agar ringkas
+        # Ambil komponen dari dalam [...] — strip semua kurung dan isinya agar ringkas
         m_comp = re.search(r"\[([^\]]+)\]", raw)
         if m_comp:
             tokens = []
             for t in m_comp.group(1).split():
-                # Ambil bagian sebelum '(' pertama â€” buang semua kurung nested
+                # Ambil bagian sebelum '(' pertama — buang semua kurung nested
                 clean = re.sub(r'\([^)]*\)', '', t)  # strip (...)
                 clean = clean.rstrip("()")            # bersihkan sisa
                 if clean:
@@ -290,10 +290,10 @@ def _extract_context(raw: str, df: pd.DataFrame | None) -> str:
                 detail = raw[idx + 1 : end_idx]
             
             if not detail.strip():
-                return "tidak ada TF konfirmasi â€” TF ini adalah yang tertinggi (self-confirm)"
+                return "tidak ada TF konfirmasi — TF ini adalah yang tertinggi (self-confirm)"
             # Potong rapi di 90 karakter tanpa memotong di tengah kata
             if len(detail) > 90:
-                detail = detail[:90].rsplit(" ", 1)[0] + "â€¦"
+                detail = detail[:90].rsplit(" ", 1)[0] + "…"
             return detail
         return ""
 
@@ -388,17 +388,17 @@ class RejectTracker:
         df:        pd.DataFrame | None = None,
     ) -> str:
         """Catat rejection, kembalikan baris log ringkas untuk dicetak caller.
-        Format: "XAUUSD M5 âœ— EMA200_WAJIB | close=4395.2 EMA200=4412.8 gap=17.6pts".
+        Format: "XAUUSD M5 ✗ EMA200_WAJIB | close=4395.2 EMA200=4412.8 gap=17.6pts".
         """
         cat     = _categorize(raw)
         ctx     = _extract_context(raw, df)
         tf_pad  = tf.ljust(3)
         cat_pad = cat.ljust(16)
 
-        line = f"{symbol} {tf_pad} âœ—  {cat_pad}"
+        line = f"{symbol} {tf_pad} ✗  {cat_pad}"
         if ctx:
             if len(ctx) > 100:
-                ctx = ctx[:100].rsplit(" ", 1)[0] + "â€¦"
+                ctx = ctx[:100].rsplit(" ", 1)[0] + "…"
             line += f" | {ctx}"
 
         # Update counter window
@@ -422,8 +422,8 @@ class RejectTracker:
     def _print_summary(self, symbol: str, elapsed_min: int) -> None:
         """Format dan cetak summary ke terminal + file log."""
         W = 58  # lebar summary box
-        border = "â•" * W
-        divider = "â”€" * W
+        border = "═" * W
+        divider = "─" * W
 
         total_reject = self._reject_count
         total_candle = self._candle_count
@@ -443,7 +443,7 @@ class RejectTracker:
 
         if total_reject == 0:
             lines.append(divider)
-            lines.append(" Tidak ada rejection â€” semua candle menghasilkan sinyal atau tidak close")
+            lines.append(" Tidak ada rejection — semua candle menghasilkan sinyal atau tidak close")
             lines.append(border)
             for l in lines:
                 logger.info(l)

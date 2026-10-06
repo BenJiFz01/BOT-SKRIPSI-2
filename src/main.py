@@ -360,6 +360,7 @@ def main() -> None:
                             h1_require_key_level         = s.h1_require_key_level,
                             scalping_pullback_min_trigger= s.scalping_pullback_min_trigger,
                             range_quality_key_level       = s.range_quality_key_level,
+                            spread                       = s.spread,
                         )
                     except Exception as eval_err:
 # Exception satu TF/candle jangan mematikan seluruh bot — log, skip, lanjut.

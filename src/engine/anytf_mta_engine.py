@@ -30,7 +30,7 @@ from src.engine.utils import _atr_proxy, _latest_closed, _reject, calc_rr
 from src.features.entry_setup import classify_entry_setup
 from src.features.session import is_active_session, session_name, session_strictness
 from src.models.signal import Signal
-from src.risk.sl_tp import dynamic_atr_sltp, fixed_zone_sltp, swing_based_sltp
+from src.risk.sl_tp import swing_based_sltp
 from src.strategy.multi_timeframe import higher_timeframes
 
 
@@ -90,6 +90,7 @@ def evaluate_any_tf_mta(
     h1_require_key_level:          bool             = True,  # H1 wajib key level
     scalping_pullback_min_trigger: int              = 2,     # floor trigger jalur PULLBACK
     range_quality_key_level:       bool             = True,  # RANGE/sideways: continuation wajib level berkualitas
+    spread:                       float            = 0.30,
 ) -> Signal | None:
     """Evaluasi sinyal untuk satu (symbol, trigger_tf). Returns Signal jika 5 gate lulus."""
     trigger_tf  = trigger_tf.upper()
@@ -353,7 +354,6 @@ def evaluate_any_tf_mta(
         return None
 
     # GATE 4 — SL/TP (Pure ATR-based system)
-    spread = settings.spread
     plan = swing_based_sltp(
         direction=direction, price_now=price_now, df=df_t, atr=atr,
         spread=spread, is_scalping=is_scalping,
@@ -364,22 +364,14 @@ def evaluate_any_tf_mta(
         return None
     
     if plan is None:
-        plan = fixed_zone_sltp(
-            direction=direction, price_now=price_now,
-            entry_zone_pips=30, sl_pips=sl_pips,
-            tp1_pips=tp1_pips, tp2_pips=tp2_pips, tp3_pips=tp3_pips,
-            pip_size=pip_size,
-        )
-        sl_method = "fixed_fallback"
-    else:
-        sl_method = plan.sl_source
-    
-    if plan is None:
         _reject(df_t, "SLTP_NONE")
         return None
+    sl_method = plan.sl_source
 
     # GATE 5 — Confluence
     eff_tp1_rr = plan.rr_tp1
+    eff_tp2_rr = plan.rr_tp2
+    eff_tp3_rr = plan.rr_tp3
     conf_score, conf_notes, conf_detail = _confluence_score(
         df=df_t, direction=direction, entry=price_now, atr=atr,
         tf=trigger_tf, is_scalping=is_scalping, sl=float(plan.sl),
@@ -434,6 +426,17 @@ def evaluate_any_tf_mta(
             if _over > _oe_max:
                 _reject(df_t, f"OVEREXTENSION(ema20_dist={_over:.2f}/max={_oe_max:.2f})"); return None
 
+    # Dedup lintas-TF: kirim duplikat arah-sama hanya bila konfluensi lebih tinggi
+    _conf_key   = (symbol, direction)
+    _now_ts     = close_time_ts.timestamp()
+    _curr_conf  = float(conf_score)
+    _prev_emit  = _LAST_LIVE_EMIT.get(_conf_key)
+    if _prev_emit and (_now_ts - _prev_emit[0]) <= _CONFLICT_WINDOW_SEC:
+        if _curr_conf <= _prev_emit[1]:
+            _reject(df_t, f"CONFLICT_SUPPRESS(prev_conf={_prev_emit[1]:.0f}>=now={_curr_conf:.0f})")
+            return None
+    _LAST_LIVE_EMIT[_conf_key] = (_now_ts, _curr_conf)
+
     ts_to_save = close_time_ts.tz_localize(None) if close_time_ts.tzinfo is not None else close_time_ts
     _LAST_SIGNAL_TIME[key] = ts_to_save
     _save_cooldown_state()
@@ -448,17 +451,6 @@ def evaluate_any_tf_mta(
     base_mode = "FLIP" if _flip_active else (_state_mode or ("PULLBACK" if _pb_active else ("REVERSAL" if _is_counter else "CONTINUATION")))
     final_mode = base_mode if _flip_active else (setup_mode if setup_mode else base_mode)
     mkt_tag = f" [{market_cond.upper()}/{market_state}]" if market_cond else ""
-
-    # Dedup lintas-TF: kirim duplikat arah-sama hanya bila konfluensi lebih tinggi
-    _conf_key   = (symbol, direction)
-    _now_ts     = close_time_ts.timestamp()
-    _curr_conf  = float(conf_score)
-    _prev_emit  = _LAST_LIVE_EMIT.get(_conf_key)
-    if _prev_emit and (_now_ts - _prev_emit[0]) <= _CONFLICT_WINDOW_SEC:
-        if _curr_conf <= _prev_emit[1]:
-            _reject(df_t, f"CONFLICT_SUPPRESS(prev_conf={_prev_emit[1]:.0f}>=now={_curr_conf:.0f})")
-            return None
-    _LAST_LIVE_EMIT[_conf_key] = (_now_ts, _curr_conf)
 
     trade_mode, exec_tf = _detect_trade_mode(trigger_tf)
     enter_tag = f" [setup={final_mode}]" if setup_mode else ""
