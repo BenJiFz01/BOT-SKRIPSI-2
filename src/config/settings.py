@@ -238,7 +238,7 @@ def load_settings() -> Settings:
 
         scalping_min_trigger_score    = _geti("SCALPING_MIN_TRIGGER_SCORE",    3),
         scalping_min_confluence_score = _geti("SCALPING_MIN_CONFLUENCE_SCORE", 2),
-        scalping_atr_min_points       = _getf("SCALPING_ATR_MIN_POINTS",       3.0),
+        scalping_atr_min_points       = _getf("SCALPING_ATR_MIN_POINTS",       4.0),
         scalping_sl_atr_mult          = _getf("SCALPING_SL_ATR_MULT",          1.2),
         scalping_cooldown_bars        = _geti("SCALPING_COOLDOWN_BARS",        5),
         scalping_cooldown_bars_m5     = _geti("SCALPING_COOLDOWN_BARS_M5",     6),

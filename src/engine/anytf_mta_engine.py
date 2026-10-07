@@ -62,7 +62,7 @@ def evaluate_any_tf_mta(
     counter_trend_tfs:             list[str] | None = None,
     scalping_min_trigger_score:    int              = 3,
     scalping_min_confluence_score: int              = 2,
-    scalping_atr_min_points:       float            = 3.0,
+    scalping_atr_min_points:       float            = 4.0,
     scalping_sl_atr_mult:          float            = 1.2,
     scalping_cooldown_bars:        int              = 5,
     scalping_cooldown_bars_m5:     int              = 6,
