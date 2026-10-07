@@ -38,6 +38,8 @@ class TrackedSignal:
     resolved:   bool = False
     breakeven_sl: float | None = None
     trailing_sl:  float | None = None
+    early_be_hit: bool  = False
+    timeframe:    str   = ""
     spread:       float = 0.30
 
 
@@ -114,6 +116,7 @@ class SignalTracker:
             atr_value   = atr_value,
             is_setup_plan   = is_setup,
             entry_zone_hit  = entry_zone_hit,
+            timeframe   = str(rec.get("timeframe") or rec.get("tf") or ("H1" if "_H1_" in sid else "")),
             spread      = float(rec.get("spread", 0.3) or 0.3),
         )
         with self._lock:
@@ -224,6 +227,31 @@ class SignalTracker:
                     self._resolve(ts, "CANCELLED", check_price, now, "SL_BEFORE_ENTRY")
                 return  # belum masuk zona, belum monitor TP
 
+        # Early Breakeven (Proteksi Dini Khusus Timeframe Intraday / H1):
+        # Jika harga bergerak searah profit >= 50% jarak TP1, aktifkan BE lebih awal
+        # guna melindungi posisi dari pembalikan harga tajam (deep retracement).
+        _is_intraday_tf = (
+            ts.timeframe.upper() in ("H1", "H4") or
+            "_H1_" in ts.signal_id or
+            "_H4_" in ts.signal_id
+        )
+        if _is_intraday_tf and not ts.tp1_hit and ts.breakeven_sl is None and ts.tp1 > 0:
+            target_dist = abs(ts.tp1 - ts.entry)
+            early_threshold = 0.50 * target_dist
+            favorable = (check_price - ts.entry) if is_buy else (ts.entry - check_price)
+            if favorable >= early_threshold:
+                if is_buy:
+                    ts.breakeven_sl = ts.entry + ts.spread
+                else:
+                    ts.breakeven_sl = ts.entry - ts.spread
+                ts.early_be_hit = True
+                logger.info(
+                    f"[TRACKER] Early Breakeven aktif ({ts.timeframe or 'H1'}) | {ts.signal_id} | "
+                    f"profit={favorable:.2f}pt >= {early_threshold:.2f}pt | "
+                    f"SL lama={ts.sl:.2f} → BE={ts.breakeven_sl:.2f}"
+                )
+                self._send_tp_notify("🛡️ <b>EARLY BREAKEVEN AKTIF (H1)</b>", ts.signal_id, check_price)
+
         # SL efektif = trailing > breakeven > original
         if ts.trailing_sl is not None:
             effective_sl = ts.trailing_sl
@@ -236,7 +264,10 @@ class SignalTracker:
                  (not is_buy and check_price >= effective_sl)
 
         if sl_hit and not ts.tp1_hit:
-            self._resolve(ts, "LOSS", check_price, now)
+            if ts.breakeven_sl is not None:
+                self._resolve(ts, "BREAKEVEN", check_price, now, reason="Early BE Hit")
+            else:
+                self._resolve(ts, "LOSS", check_price, now)
             return
 
         if not ts.tp1_hit and ts.tp1 > 0:
@@ -305,7 +336,7 @@ class SignalTracker:
     def _resolve(self, ts: TrackedSignal, outcome: str, price: float, now: datetime, reason: str = "") -> None:
         ts.resolved  = True
         duration_m   = int((now - ts.start_time).total_seconds() / 60)
-        emoji  = {"WIN_TP1": "✅", "WIN_TP2": "✅✅", "WIN_TP3": "✅✅✅", "LOSS": "❌", "CANCELLED": "⚠️"}.get(outcome, "")
+        emoji  = {"WIN_TP1": "✅", "WIN_TP2": "✅✅", "WIN_TP3": "✅✅✅", "LOSS": "❌", "CANCELLED": "⚠️", "BREAKEVEN": "🛡️"}.get(outcome, "")
         is_new = ts.signal_id not in self._startup_signal_ids
 
         logger.success(f"[TRACKER] {outcome} | {ts.signal_id} | price={price:.2f} | duration={duration_m}m")
@@ -316,7 +347,7 @@ class SignalTracker:
         _cb_key     = f"{ts.symbol}_{'scalping' if _is_scal else 'intraday'}"
         if outcome == "LOSS":
             record_loss(_cb_key)
-        elif outcome.startswith("WIN"):
+        elif outcome.startswith("WIN") or outcome == "BREAKEVEN":
             reset_consec_loss(_cb_key)
 
         # Kirim Telegram dulu — tidak tertahan I/O file
