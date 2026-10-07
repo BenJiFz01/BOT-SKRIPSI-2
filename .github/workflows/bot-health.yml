@@ -1,0 +1,43 @@
+name: Bot Health Monitor
+
+on:
+  schedule:
+    # setiap 5 menit
+    - cron: "*/5 * * * *"
+  workflow_dispatch:
+
+env:
+  HEALTH_URL: http://157.20.32.172:8100/health
+
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Ping health endpoint
+        id: ping
+        # -f (fail on http error) + timeout. Exit non-zero jika VPS mati/tidak merespons.
+        run: |
+          if curl -fsS --max-time 15 "$HEALTH_URL" >/tmp/health.out 2>/tmp/health.err; then
+            echo "STATUS=UP" >> "$GITHUB_ENV"
+            echo "Bot UP: $(cat /tmp/health.out)"
+          else
+            echo "STATUS=DOWN" >> "$GITHUB_ENV"
+            echo "Bot DOWN - tidak merespons di $HEALTH_URL"
+          fi
+
+      - name: Kirim alert DOWN ke Telegram
+        if: env.STATUS == 'DOWN'
+        env:
+          BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          CHAT_ID:   ${{ secrets.TELEGRAM_CHAT_ID }}
+        run: |
+          NOW=$(date -u '+%Y-%m-%d %H:%M:%S UTC')
+          MSG="<b>\ud83d\udd34 BOT OFFLINE</b>%0A%0AStatus: DOWN (sistem off / VPS crash)%0AWaktu : <code>$NOW</code>%0AUrl   : <code>$HEALTH_URL</code>"
+          curl -s --max-time 15 \
+            "https://api.telegram.org/bot${BOT_TOKEN}/sendMessage" \
+            -d "chat_id=${CHAT_ID}" \
+            -d "text=${MSG}" \
+            -d "parse_mode=HTML" \
+            -o /dev/null -w "telegram_http=%{http_code}\n"
