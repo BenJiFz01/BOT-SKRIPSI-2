@@ -19,6 +19,7 @@ from src.features.patterns import add_patterns
 from src.infra.logger import setup_logger
 from src.infra.reject_tracker import RejectTracker
 from src.infra.report.generator import generate_report
+from src.infra.health_server import HealthServer
 from src.infra.scheduler import CandleCloseWatcher
 from src.infra.signal_logger import SignalLogger
 from src.infra.signal_tracker import SignalTracker
@@ -237,6 +238,20 @@ def main() -> None:
         refresh_report_fn = lambda: _refresh_report(sig_logger),
     )
     watcher = CandleCloseWatcher()
+    health  = HealthServer()
+    health.start()
+
+    def _alert_offline(reason: str) -> None:
+        try:
+            send_message(
+                s.telegram_token, s.telegram_chat_id,
+                f"<b>🔴 BOT OFFLINE</b>\n\n"
+                f"Status   : <code>OFF ({reason})</code>\n"
+                f"Waktu    : <code>{datetime.now(pytz.UTC).strftime('%Y-%m-%d %H:%M:%S UTC')}</code>\n"
+                f"Server   : <code>{s.mt5_server}</code>",
+            )
+        except Exception as e:
+            logger.warning(f"Alert offline gagal: {e}")
 
     try:
         acc = connect(s.mt5_login, s.mt5_password, s.mt5_server, s.mt5_terminal_path)
@@ -403,10 +418,13 @@ def main() -> None:
 
     except KeyboardInterrupt:
         logger.info("Bot dihentikan (Ctrl+C).")
+        _alert_offline("dibentikan manual (Ctrl+C)")
     except Exception:
         logger.exception("FATAL ERROR — bot berhenti tidak terduga")
+        _alert_offline("crash tidak terduga")
     finally:
         tracker.stop()
+        health.stop()
         shutdown()
         logger.info("MT5 disconnected. Bot selesai.")
 
