@@ -60,6 +60,9 @@ class Settings:
     telegram_token:   str
     telegram_chat_id: str
 
+    # Healthcheck heartbeat (Healthchecks.io)
+    healthcheck_ping_url: str
+
     # Umum
     symbols:      list[str]
     timeframes:   list[str]
@@ -174,6 +177,8 @@ def load_settings() -> Settings:
 
         telegram_token   = _get("TELEGRAM_BOT_TOKEN"),
         telegram_chat_id = _get("TELEGRAM_CHAT_ID"),
+
+        healthcheck_ping_url = _get("HEALTHCHECK_PING_URL", ""),
 
         symbols      = symbols,
         timeframes   = tfs,

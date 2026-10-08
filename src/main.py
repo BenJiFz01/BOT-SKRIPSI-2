@@ -5,6 +5,7 @@ Loop: candle close → evaluate_any_tf_mta() → sinyal ke Telegram → tracker 
 """
 import re
 import time
+import requests
 from datetime import datetime
 
 import MetaTrader5 as mt5
@@ -253,6 +254,26 @@ def main() -> None:
         except Exception as e:
             logger.warning(f"Alert offline gagal: {e}")
 
+    # Heartbeat ke Healthchecks.io — sinyal "masih hidup" dikirim keluar VPS
+    # tiap MENIT_HEARTBEAT menit. Jika VPS crash/bot mati, ping berhenti dan
+    # Healthchecks.io otomatis mengirim alert ke Telegram.
+    heartbeat_url  = s.healthcheck_ping_url.strip()
+    heartbeat_ts   = 0.0
+    HEARTBEAT_INTERVAL = 60.0  # 60 detik → Healthchecks Period=5m & Grace=5m aman
+
+    def _heartbeat_ping() -> None:
+        nonlocal heartbeat_ts
+        if not heartbeat_url:
+            return
+        now = time.time()
+        if now - heartbeat_ts < HEARTBEAT_INTERVAL:
+            return
+        heartbeat_ts = now
+        try:
+            requests.get(heartbeat_url, timeout=10)
+        except Exception as e:
+            logger.warning(f"Heartbeat ping gagal: {e}")
+
     try:
         acc = connect(s.mt5_login, s.mt5_password, s.mt5_server, s.mt5_terminal_path)
         logger.info(f"MT5 terhubung | login={acc.login} server={acc.server}")
@@ -414,6 +435,7 @@ def main() -> None:
             reject_tracker.maybe_print_summary(
                 symbol=s.symbols[0] if s.symbols else "XAUUSD"
             )
+            _heartbeat_ping()
             time.sleep(s.poll_seconds)
 
     except KeyboardInterrupt:
