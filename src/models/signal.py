@@ -64,6 +64,9 @@ class Signal(BaseModel):
     session_name: str   = ""
     atr_value:    float = 0.0
     sl_source:    str   = ""
+    sl_atr_ratio: float = 0.0
+    entry_spread: float = 0.30
+    entry_hour:   int   = 0
     trade_mode:   str   = "intraday"
     exec_tf:      str   = ""
     reason:       str   = ""

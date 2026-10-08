@@ -20,13 +20,16 @@ CSV_FIELDS = [
     "signal_mode", "trade_mode", "is_setup_plan", "exec_tf", "candle_close",
     "entry", "sl", "tp1", "tp2", "tp3", "rr", "rr_tp2_actual",
     "trigger_score", "confluence_score", "htf_bias",
-"trigger_notes", "confluence_notes", "pattern_names",
+    "trigger_notes", "confluence_notes", "pattern_names",
     "fib_detail", "snr_detail", "snd_detail", "divergence_detail",
     "sweep_detail", "fvg_detail",
-    "session_name", "sl_method", "atr_value",
+    "session_name", "sl_method", "sl_source", "atr_value", "sl_atr_ratio",
+    "entry_spread", "entry_hour",
     "outcome", "outcome_price", "outcome_time",
     "tp1_hit_time", "tp2_hit_time", "tp3_hit_time", "sl_hit_time",
-    "duration_minutes", "notes",
+    "breakeven_sl", "trailing_sl",
+    "duration_minutes", "crossed_rollover", "mae_atr", "mfe_atr", "post_sl_tp1_hit",
+    "notes",
 ]
 
 # Field & keyword untuk component accuracy di get_stats()
@@ -92,6 +95,16 @@ class SignalRecord:
     session_name:      str
     sl_method:         str
     atr_value:         float
+    sl_source:         str   = ""
+    sl_atr_ratio:      float = 0.0
+    entry_spread:      float = 0.30
+    entry_hour:        int   = 0
+    breakeven_sl:      float = 0.0
+    trailing_sl:       float = 0.0
+    crossed_rollover:  bool  = False
+    mae_atr:           float = 0.0
+    mfe_atr:           float = 0.0
+    post_sl_tp1_hit:   str   = ""
     outcome:           str   = "PENDING"
     outcome_price:     float = 0.0
     outcome_time:      str   = ""
@@ -127,6 +140,17 @@ class SignalLogger:
         if not self.csv_path.exists():
             with open(self.csv_path, "w", newline="", encoding="utf-8") as f:
                 csv.DictWriter(f, fieldnames=CSV_FIELDS).writeheader()
+        elif self.json_path.exists():
+            # Migrasi otomatis jika kolom CSV bertambah
+            try:
+                with open(self.csv_path, "r", encoding="utf-8") as f:
+                    curr_header = f.readline().strip().split(",")
+                if curr_header != CSV_FIELDS:
+                    data = self._load()
+                    if data:
+                        self._rewrite_csv(data)
+            except Exception:
+                pass
 
     def _load(self) -> dict[str, dict]:
         """Load JSON — harus dipanggil di dalam _lock."""
@@ -195,7 +219,11 @@ class SignalLogger:
             fvg_detail        = sig.fvg_detail,
             session_name      = sig.session_name,
             sl_method         = sig.sl_method,
+            sl_source         = getattr(sig, "sl_source", "") or sig.sl_method,
             atr_value         = round(sig.atr_value, 4),
+            sl_atr_ratio      = round(getattr(sig, "sl_atr_ratio", 0.0), 2),
+            entry_spread      = round(getattr(sig, "entry_spread", 0.30), 2),
+            entry_hour        = int(getattr(sig, "entry_hour", 0)),
             outcome           = "SETUP" if is_setup else "PENDING",
         )
 
@@ -222,15 +250,64 @@ class SignalLogger:
             data[signal_id][field] = hit_time
             self._save(data)
             self._rewrite_csv(data)
-        return True
+            return True
+
+    def update_tracker_state(
+        self,
+        signal_id:        str,
+        breakeven_sl:     float | None = None,
+        trailing_sl:      float | None = None,
+        early_be_hit:     bool = False,
+        crossed_rollover: bool = False,
+        min_price_seen:   float | None = None,
+        max_price_seen:   float | None = None,
+    ) -> bool:
+        """Simpan status dinamis tracker ke JSON (BE, trailing, rollover) agar tahan restart."""
+        with self._lock:
+            data = self._load()
+            if signal_id not in data:
+                return False
+            rec = data[signal_id]
+            if breakeven_sl is not None:
+                rec["breakeven_sl"] = breakeven_sl
+            if trailing_sl is not None:
+                rec["trailing_sl"] = trailing_sl
+            if early_be_hit:
+                rec["early_be_hit"] = True
+            if crossed_rollover:
+                rec["crossed_rollover"] = True
+            if min_price_seen is not None:
+                rec["min_price_seen"] = min_price_seen
+            if max_price_seen is not None:
+                rec["max_price_seen"] = max_price_seen
+            self._save(data)
+            return True
+
+    def update_post_sl_hit(self, signal_id: str, hit: bool) -> bool:
+        """Catat hasil observasi 12-bar M5 pasca-SL: apakah harga akhirnya capai TP1."""
+        with self._lock:
+            data = self._load()
+            if signal_id not in data:
+                return False
+            rec = data[signal_id]
+            rec["post_sl_tp1_hit"] = "TRUE" if hit else "FALSE"
+            self._save(data)
+            self._rewrite_csv(data)
+            return True
 
     def update_outcome(
         self,
-        signal_id:  str,
-        outcome:    str,
-        price:      float = 0.0,
-        notes:      str   = "",
-        duration_m: int   = 0,
+        signal_id:        str,
+        outcome:          str,
+        price:            float = 0.0,
+        notes:            str   = "",
+        duration_m:       int   = 0,
+        breakeven_sl:     float | None = None,
+        trailing_sl:      float | None = None,
+        crossed_rollover: bool = False,
+        mae_atr:          float = 0.0,
+        mfe_atr:          float = 0.0,
+        post_sl_tp1_hit:  str = "",
     ) -> bool:
         """Update hasil akhir sinyal."""
         with self._lock:
@@ -242,6 +319,16 @@ class SignalLogger:
             rec["outcome_price"] = price
             rec["outcome_time"]  = now_wib_str()
             rec["notes"]         = notes
+            if breakeven_sl is not None:
+                rec["breakeven_sl"] = breakeven_sl
+            if trailing_sl is not None:
+                rec["trailing_sl"] = trailing_sl
+            if crossed_rollover:
+                rec["crossed_rollover"] = True
+            rec["mae_atr"] = mae_atr
+            rec["mfe_atr"] = mfe_atr
+            if post_sl_tp1_hit:
+                rec["post_sl_tp1_hit"] = post_sl_tp1_hit
             if duration_m > 0:
                 rec["duration_minutes"] = duration_m
             elif rec.get("timestamp") and not rec.get("duration_minutes"):
@@ -258,7 +345,7 @@ class SignalLogger:
                 rec["sl_hit_time"] = rec["outcome_time"]
             self._save(data)
             self._rewrite_csv(data)
-        return True
+            return True
 
     def get_all_records(self) -> list[dict]:
         with self._lock:

@@ -280,31 +280,35 @@ def load_settings() -> Settings:
         range_quality_key_level       = _getb("RANGE_QUALITY_KEY_LEVEL",          True),
     )
     
-    scal_tp1 = _getf("SCALPING_TP1_RR", 1.0)
-    scal_tp2 = _getf("SCALPING_TP2_RR", 1.5)
-    scal_tp3 = _getf("SCALPING_TP3_RR", 2.0)
-    intra_tp1 = s.intraday_tp1_rr
-    intra_tp2 = s.intraday_tp2_rr
-    intra_tp3 = s.intraday_tp3_rr
-    obs_frac = s.obstacle_min_rr_frac
-    
-    if obs_frac <= 0.75:
+    # Validasi pengali SL vs Clamp Max (mencegah fallback langsung ditolak clamp)
+    if s.scalping_sl_atr_mult >= s.scalping_max_atr_mult:
         raise ValueError(
-            f"OBSTACLE_MIN_RR_FRAC={obs_frac:.2f} terlalu rendah. "
-            f"Untuk scalping (TP 1.0/1.5/2.0R), min_rr harus > 0.75 (0.75×1.5=1.125 < 1.0). "
-            f"Untuk intraday (TP 1.0/2.0/3.0R), min_rr harus > 0.67. "
-            f"Nilai rendah menyebabkan TP collision (tp2_adjusted == tp3_adjusted). "
-            f"Gunakan >= 0.8 (default)."
+            f"SCALPING_SL_ATR_MULT ({s.scalping_sl_atr_mult}) harus < SCALPING_MAX_ATR_MULT ({s.scalping_max_atr_mult})"
         )
-    
-    if not (scal_tp1 < scal_tp2 < scal_tp3):
+    if s.intraday_sl_atr_mult >= s.intraday_max_atr_mult:
         raise ValueError(
-            f"SCALPING TP order salah: TP1={scal_tp1} < TP2={scal_tp2} < TP3={scal_tp3} harus strict ascending"
+            f"INTRADAY_SL_ATR_MULT ({s.intraday_sl_atr_mult}) harus < INTRADAY_MAX_ATR_MULT ({s.intraday_max_atr_mult})"
         )
-    
-    if not (intra_tp1 < intra_tp2 < intra_tp3):
+
+    # Validasi urutan TP (strict ascending)
+    if not (s.scalping_tp1_rr < s.scalping_tp2_rr < s.scalping_tp3_rr):
         raise ValueError(
-            f"INTRADAY TP order salah: TP1={intra_tp1} < TP2={intra_tp2} < TP3={intra_tp3} harus strict ascending"
+            f"SCALPING TP order salah: TP1={s.scalping_tp1_rr} < TP2={s.scalping_tp2_rr} < TP3={s.scalping_tp3_rr} harus strict ascending"
+        )
+    if not (s.intraday_tp1_rr < s.intraday_tp2_rr < s.intraday_tp3_rr):
+        raise ValueError(
+            f"INTRADAY TP order salah: TP1={s.intraday_tp1_rr} < TP2={s.intraday_tp2_rr} < TP3={s.intraday_tp3_rr} harus strict ascending"
+        )
+
+    # Validasi ambang batas obstacle dihitung dinamis dari rasio TP
+    req_scal = max(s.scalping_tp1_rr / s.scalping_tp2_rr, s.scalping_tp2_rr / s.scalping_tp3_rr)
+    req_intra = max(s.intraday_tp1_rr / s.intraday_tp2_rr, s.intraday_tp2_rr / s.intraday_tp3_rr)
+    req_min = max(req_scal, req_intra)
+    if s.obstacle_min_rr_frac <= req_min:
+        raise ValueError(
+            f"OBSTACLE_MIN_RR_FRAC={s.obstacle_min_rr_frac:.2f} terlalu rendah. "
+            f"Wajib > max(tp1/tp2, tp2/tp3) = {req_min:.2f} untuk mencegah TP collision. "
+            f"Gunakan > {req_min:.2f} (default 0.80)."
         )
     
     return s

@@ -454,6 +454,9 @@ def evaluate_any_tf_mta(
 
     trade_mode, exec_tf = _detect_trade_mode(trigger_tf)
     enter_tag = f" [setup={final_mode}]" if setup_mode else ""
+    _sl_dist_actual = abs(float(entry_for_rr) - float(plan.sl)) if plan.sl is not None else 0.0
+    _sl_ratio = round(_sl_dist_actual / float(atr), 2) if float(atr) > 0 else 0.0
+    _hr_wib = int((now_utc.hour + 7) % 24)
     return Signal(
         symbol=symbol, tf=trigger_tf, direction=direction, close_time=close_time,
         signal_type="LIVE",
@@ -463,6 +466,7 @@ def evaluate_any_tf_mta(
         tp=float(plan.tp1), tp2=float(plan.tp2), tp3=float(plan.tp3),
         rr=float(rr), rr_tp2_actual=float(rr_tp2_actual or 0.0),
         sl_method=sl_method, atr_value=float(atr), sl_source=plan.sl_source,
+        sl_atr_ratio=_sl_ratio, entry_spread=float(spread), entry_hour=_hr_wib,
         tp1_rr=float(eff_tp1_rr), tp2_rr=float(eff_tp2_rr), tp3_rr=float(eff_tp3_rr),
         trigger_score=trig_score, trigger_max=6, confluence_score=conf_score,
         htf_bias=bias_detail, htf_bias_all=_all_tf_bias(data_by_tf),

@@ -2,7 +2,7 @@
 
 import threading
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Callable
 
 import pandas as pd
@@ -41,6 +41,14 @@ class TrackedSignal:
     early_be_hit: bool  = False
     timeframe:    str   = ""
     spread:       float = 0.30
+    sl_source:    str   = ""
+    min_price_seen: float = 0.0
+    max_price_seen: float = 0.0
+    crossed_rollover: bool = False
+    # Observasi 12 bar M5 (60 menit) pasca-SL
+    post_sl_monitoring: bool = False
+    post_sl_expiry: datetime | None = None
+    post_sl_tp1_hit: bool | None = None
 
 
 class SignalTracker:
@@ -62,6 +70,7 @@ class SignalTracker:
         self._poll_interval  = poll_interval
         self._max_hours      = max_duration_h
         self._active: dict[str, TrackedSignal] = {}
+        self._post_sl_active: dict[str, TrackedSignal] = {}
         self._lock   = threading.Lock()
         self._stop   = threading.Event()
         self._thread: threading.Thread | None = None
@@ -101,27 +110,59 @@ class SignalTracker:
         else:
             entry_zone_hit = True
 
+        # Pulihkan status BE / trailing / TP-hit jika ada dari restart sebelumnya
+        be_val = rec.get("breakeven_sl")
+        be_sl  = float(be_val) if be_val is not None and float(be_val) > 0 else None
+        tr_val = rec.get("trailing_sl")
+        tr_sl  = float(tr_val) if tr_val is not None and float(tr_val) > 0 else None
+
+        tp1_hit = bool(rec.get("tp1_hit")) or bool(rec.get("tp1_hit_time"))
+        tp2_hit = bool(rec.get("tp2_hit")) or bool(rec.get("tp2_hit_time"))
+        tp3_hit = bool(rec.get("tp3_hit")) or bool(rec.get("tp3_hit_time"))
+        early_be = bool(rec.get("early_be_hit", False))
+
+        min_px = float(rec.get("min_price_seen") or entry)
+        max_px = float(rec.get("max_price_seen") or entry)
+        if min_px <= 0: min_px = entry
+        if max_px <= 0: max_px = entry
+
+        tf = str(rec.get("timeframe") or rec.get("tf") or "")
+        if not tf and "_" in sid:
+            parts = sid.split("_")
+            if len(parts) >= 2 and parts[1] in ("M5", "M15", "H1", "H4", "D1"):
+                tf = parts[1]
+
         ts = TrackedSignal(
-            signal_id   = sid,
-            symbol      = rec.get("symbol", "XAUUSD"),
-            direction   = direction,
-            entry       = entry,
-            entry_low   = entry_low,
-            entry_high  = entry_high,
-            sl          = float(rec.get("sl",    0) or 0),
-            tp1         = float(rec.get("tp1",   0) or 0),
-            tp2         = float(rec.get("tp2",   0) or 0) or None,
-            tp3         = float(rec.get("tp3",   0) or 0) or None,
-            start_time  = parse_dt_safe(rec.get("timestamp", "")),
-            atr_value   = atr_value,
+            signal_id       = sid,
+            symbol          = rec.get("symbol", "XAUUSD"),
+            direction       = direction,
+            entry           = entry,
+            entry_low       = entry_low,
+            entry_high      = entry_high,
+            sl              = float(rec.get("sl",    0) or 0),
+            tp1             = float(rec.get("tp1",   0) or 0),
+            tp2             = float(rec.get("tp2",   0) or 0) or None,
+            tp3             = float(rec.get("tp3",   0) or 0) or None,
+            start_time      = parse_dt_safe(rec.get("timestamp", "")),
+            atr_value       = atr_value,
             is_setup_plan   = is_setup,
             entry_zone_hit  = entry_zone_hit,
-            timeframe   = str(rec.get("timeframe") or rec.get("tf") or ("H1" if "_H1_" in sid else "")),
-            spread      = float(rec.get("spread", 0.3) or 0.3),
+            tp1_hit         = tp1_hit,
+            tp2_hit         = tp2_hit,
+            tp3_hit         = tp3_hit,
+            breakeven_sl    = be_sl,
+            trailing_sl     = tr_sl,
+            early_be_hit    = early_be,
+            timeframe       = tf,
+            spread          = float(rec.get("entry_spread") or rec.get("spread", 0.3) or 0.3),
+            sl_source       = str(rec.get("sl_source") or rec.get("sl_method") or ""),
+            min_price_seen  = min_px,
+            max_price_seen  = max_px,
+            crossed_rollover= bool(rec.get("crossed_rollover", False)),
         )
         with self._lock:
             self._active[sid] = ts
-        logger.debug(f"SignalTracker.add | {sid} | {ts.direction} @ {ts.entry} | setup={is_setup} atr={atr_value:.4f}")
+        logger.debug(f"SignalTracker.add | {sid} | {ts.direction} @ {ts.entry} | setup={is_setup} atr={atr_value:.4f} BE={be_sl} Trail={tr_sl}")
 
     def get_active_count(self) -> int:
         with self._lock:
@@ -207,12 +248,63 @@ class SignalTracker:
         with self._lock:
             self._active = {k: v for k, v in self._active.items() if not v.resolved}
 
+        # Periksa sinyal pasca-SL (observasi 12 bar M5 / 60 menit)
+        now_check = datetime.now(tz=TZ_WIB)
+        self._check_post_sl(prices_cache, now_check)
+
         return max(1, min_interval)  # minimum 1 detik
+
+    def _check_post_sl(self, prices_cache: dict[str, tuple[float, float]], now: datetime) -> None:
+        """Observasi 12 candle M5 (60 mnt) pasca-SL: apakah harga akhirnya capai TP1."""
+        with self._lock:
+            p_ids = list(self._post_sl_active.keys())
+        for sid in p_ids:
+            with self._lock:
+                ts = self._post_sl_active.get(sid)
+            if not ts:
+                continue
+            sym = ts.symbol
+            if sym not in prices_cache:
+                try:
+                    bid, ask = self._get_price(sym)
+                    if bid > 0 and ask > 0:
+                        prices_cache[sym] = (bid, ask)
+                except Exception:
+                    continue
+            bid, ask = prices_cache.get(sym, (0.0, 0.0))
+            if bid <= 0 or ask <= 0:
+                continue
+            check_price = bid if ts.direction == "BUY" else ask
+            hit_tp1 = (ts.direction == "BUY" and check_price >= ts.tp1) or \
+                      (ts.direction == "SELL" and check_price <= ts.tp1)
+            if hit_tp1:
+                logger.info(f"[POST-SL MONITOR] {ts.signal_id} mencapai TP1 ({ts.tp1:.2f}) dalam 12 bar M5 pasca-SL! (px={check_price:.2f})")
+                self._logger.update_post_sl_hit(ts.signal_id, True)
+                with self._lock:
+                    self._post_sl_active.pop(sid, None)
+            elif ts.post_sl_expiry and now >= ts.post_sl_expiry:
+                self._logger.update_post_sl_hit(ts.signal_id, False)
+                with self._lock:
+                    self._post_sl_active.pop(sid, None)
 
     def _evaluate(self, ts: TrackedSignal, bid: float, ask: float) -> None:
         now        = datetime.now(tz=TZ_WIB)
         is_buy     = ts.direction == "BUY"
         check_price = bid if is_buy else ask
+
+        # Tracking MAE / MFE harga ekstrem sepanjang transaksi
+        if ts.min_price_seen <= 0 or bid < ts.min_price_seen:
+            ts.min_price_seen = bid
+        if ts.max_price_seen <= 0 or ask > ts.max_price_seen:
+            ts.max_price_seen = ask
+
+        # Deteksi rollover spread spike:
+        # 1. Spread saat ini >= 3.0 pt (normal XAU/USD ~0.30 pt; lonjakan malam hari)
+        # 2. Jam rollover harian WIB: 03:55-05:30 WIB (21:55-22:30 UTC)
+        curr_spread = abs(ask - bid)
+        is_rollover_time = (now.hour == 4) or (now.hour == 3 and now.minute >= 55) or (now.hour == 5 and now.minute <= 30)
+        if curr_spread >= 3.0 or is_rollover_time:
+            ts.crossed_rollover = True
 
     # Setup plan: tunggu harga masuk entry zone dulu
         if not ts.entry_zone_hit:
@@ -245,12 +337,22 @@ class SignalTracker:
                 else:
                     ts.breakeven_sl = ts.entry - ts.spread
                 ts.early_be_hit = True
+                tag_tf = ts.timeframe.upper() if ts.timeframe.upper() in ("H1", "H4") else "H1"
                 logger.info(
-                    f"[TRACKER] Early Breakeven aktif ({ts.timeframe or 'H1'}) | {ts.signal_id} | "
+                    f"[TRACKER] Early Breakeven aktif ({tag_tf}) | {ts.signal_id} | "
                     f"profit={favorable:.2f}pt >= {early_threshold:.2f}pt | "
                     f"SL lama={ts.sl:.2f} → BE={ts.breakeven_sl:.2f}"
                 )
-                self._send_tp_notify("🛡️ <b>EARLY BREAKEVEN AKTIF (H1)</b>", ts.signal_id, check_price)
+                self._send_tp_notify(f"🛡️ <b>EARLY BREAKEVEN AKTIF ({tag_tf})</b>", ts.signal_id, check_price)
+                self._logger.update_tracker_state(
+                    ts.signal_id,
+                    breakeven_sl=ts.breakeven_sl,
+                    trailing_sl=ts.trailing_sl,
+                    early_be_hit=ts.early_be_hit,
+                    crossed_rollover=ts.crossed_rollover,
+                    min_price_seen=ts.min_price_seen,
+                    max_price_seen=ts.max_price_seen,
+                )
 
         # SL efektif = trailing > breakeven > original
         if ts.trailing_sl is not None:
@@ -287,6 +389,15 @@ class SignalTracker:
                     f"[TRACKER] Breakeven aktif | {ts.signal_id} | "
                     f"SL lama={ts.sl:.2f} → BE={ts.breakeven_sl:.2f} (entry + spread)"
                 )
+                self._logger.update_tracker_state(
+                    ts.signal_id,
+                    breakeven_sl=ts.breakeven_sl,
+                    trailing_sl=ts.trailing_sl,
+                    early_be_hit=ts.early_be_hit,
+                    crossed_rollover=ts.crossed_rollover,
+                    min_price_seen=ts.min_price_seen,
+                    max_price_seen=ts.max_price_seen,
+                )
 
                 if not ts.tp2:
                     self._resolve(ts, "WIN_TP1", check_price, now)
@@ -303,6 +414,15 @@ class SignalTracker:
                 logger.info(
                     f"[TRACKER] Trailing aktif | {ts.signal_id} | "
                     f"SL → TP1={ts.trailing_sl:.2f} (lock 1.0R)"
+                )
+                self._logger.update_tracker_state(
+                    ts.signal_id,
+                    breakeven_sl=ts.breakeven_sl,
+                    trailing_sl=ts.trailing_sl,
+                    early_be_hit=ts.early_be_hit,
+                    crossed_rollover=ts.crossed_rollover,
+                    min_price_seen=ts.min_price_seen,
+                    max_price_seen=ts.max_price_seen,
                 )
                 
                 if not ts.tp3:
@@ -339,7 +459,39 @@ class SignalTracker:
         emoji  = {"WIN_TP1": "✅", "WIN_TP2": "✅✅", "WIN_TP3": "✅✅✅", "LOSS": "❌", "CANCELLED": "⚠️", "BREAKEVEN": "🛡️"}.get(outcome, "")
         is_new = ts.signal_id not in self._startup_signal_ids
 
-        logger.success(f"[TRACKER] {outcome} | {ts.signal_id} | price={price:.2f} | duration={duration_m}m")
+        # Level harga eksekusi terencana (SL/TP struktural), bukan sekadar harga tick observasi
+        if outcome == "WIN_TP1":
+            planned_exit = ts.tp1
+        elif outcome == "WIN_TP2":
+            planned_exit = ts.tp2 if ts.tp2 else ts.tp1
+        elif outcome == "WIN_TP3":
+            planned_exit = ts.tp3 if ts.tp3 else (ts.tp2 or ts.tp1)
+        elif outcome == "BREAKEVEN":
+            planned_exit = ts.breakeven_sl if ts.breakeven_sl is not None else ts.entry
+        elif outcome == "LOSS":
+            planned_exit = ts.sl
+        else:
+            planned_exit = price
+
+        # Kalkulasi MAE & MFE dalam satuan ATR
+        is_buy = ts.direction == "BUY"
+        adverse_pts = max(0.0, ts.entry - ts.min_price_seen) if is_buy else max(0.0, ts.max_price_seen - ts.entry)
+        favorable_pts = max(0.0, ts.max_price_seen - ts.entry) if is_buy else max(0.0, ts.entry - ts.min_price_seen)
+        mae_atr = round(adverse_pts / ts.atr_value, 2) if ts.atr_value > 0 else 0.0
+        mfe_atr = round(favorable_pts / ts.atr_value, 2) if ts.atr_value > 0 else 0.0
+
+        # Jika LOSS, mulai observasi 12 candle M5 (60 menit) pasca-SL: apakah harga capai TP1
+        if outcome == "LOSS" and ts.tp1 > 0:
+            ts.post_sl_monitoring = True
+            ts.post_sl_expiry = now + timedelta(minutes=60)
+            ts.post_sl_tp1_hit = False
+            with self._lock:
+                self._post_sl_active[ts.signal_id] = ts
+
+        logger.success(
+            f"[TRACKER] {outcome} | {ts.signal_id} | planned_exit={planned_exit:.2f} (obs={price:.2f}) | "
+            f"MAE={mae_atr:.2f}xATR MFE={mfe_atr:.2f}xATR | duration={duration_m}m"
+        )
 
         # Consecutive loss/win tracker — key per mode agar scalping/intraday tak saling blokir
         _tf_from_id = ts.signal_id.split("_")[1] if "_" in ts.signal_id else ""
@@ -356,19 +508,32 @@ class SignalTracker:
                 self._notify(
                     f"{emoji} <b>{outcome}</b>\n"
                     f"ID: <code>{ts.signal_id}</code>\n"
-                    f"Harga: <code>{price:.2f}</code>\n"
+                    f"Harga: <code>{planned_exit:.2f}</code>\n"
                     f"Durasi: <code>{duration_m} menit</code>\n"
-                    f"Pips: <code>{abs(price - ts.entry):.1f}</code>"
+                    f"Pips: <code>{abs(planned_exit - ts.entry):.1f}</code>"
                 )
             except Exception as e:
                 logger.warning(f"Tracker notify error: {e}")
 
         # Simpan ke file di thread terpisah agar I/O tak memblokir polling
+        note_str = reason or "Auto-detected by SignalTracker"
+        if abs(price - planned_exit) > 0.01:
+            note_str += f" | obs_px={price:.2f}"
+        if ts.crossed_rollover:
+            note_str += " | ROLLOVER"
+
         def _save_async() -> None:
             try:
                 self._logger.update_outcome(
                     ts.signal_id, outcome,
-                    price=price, notes=reason or "Auto-detected by SignalTracker", duration_m=duration_m,
+                    price=planned_exit,
+                    notes=note_str,
+                    duration_m=duration_m,
+                    breakeven_sl=ts.breakeven_sl,
+                    trailing_sl=ts.trailing_sl,
+                    crossed_rollover=ts.crossed_rollover,
+                    mae_atr=mae_atr,
+                    mfe_atr=mfe_atr,
                 )
             except Exception as e:
                 logger.warning(f"Tracker save error: {e}")
