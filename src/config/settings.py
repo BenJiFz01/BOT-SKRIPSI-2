@@ -48,6 +48,16 @@ def _getb(name: str, default: bool) -> bool:
     return os.getenv(name, str(default)).strip().lower() in ("1", "true", "yes", "on")
 
 
+def _gets_choice(name: str, default: str, choices: tuple[str, ...]) -> str:
+    """Baca string dan pastikan nilainya salah satu dari `choices`."""
+    v = (os.getenv(name) or default).strip().lower()
+    if v not in choices:
+        raise ValueError(
+            f"{name} harus salah satu dari {list(choices)}, dapat: '{v}'"
+        )
+    return v
+
+
 @dataclass(frozen=True)
 class Settings:
     # MT5
@@ -108,6 +118,7 @@ class Settings:
     intraday_sl_buffer_atr:    float
     intraday_min_spread_mult:  float
     intraday_max_atr_mult:     float
+    sl_oob_mode:               str
     intraday_tp1_rr:           float
     intraday_tp2_rr:           float
     intraday_tp3_rr:           float
@@ -220,6 +231,7 @@ def load_settings() -> Settings:
         intraday_sl_buffer_atr    = _getf("INTRADAY_SL_BUFFER_ATR",    0.5),
         intraday_min_spread_mult  = _getf("INTRADAY_MIN_SPREAD_MULT",  5.0),
         intraday_max_atr_mult     = _getf("INTRADAY_MAX_ATR_MULT",     2.5),
+        sl_oob_mode               = _gets_choice("SL_OOB_MODE", "reject", ("reject", "atr_fallback")),
         intraday_tp1_rr           = _getf("INTRADAY_TP1_RR",           1.0),
         intraday_tp2_rr           = _getf("INTRADAY_TP2_RR",           2.0),
         intraday_tp3_rr           = _getf("INTRADAY_TP3_RR",           3.0),

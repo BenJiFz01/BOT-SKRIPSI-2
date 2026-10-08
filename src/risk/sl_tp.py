@@ -25,6 +25,7 @@ class _AtrSlConfig:
     sl_buffer_atr:     float   # swing buffer = sl_buffer_atr × ATR
     min_spread_mult:   float   # min SL = spread × min_spread_mult
     max_atr_mult:      float   # max SL = max_atr_mult × ATR
+    oob_mode:          str     # "reject" | "atr_fallback" saat swing terlalu jauh
     tp1_rr:            float   # TP1 = tp1_rr × sl_dist
     tp2_rr:            float
     tp3_rr:            float
@@ -69,6 +70,7 @@ def get_atr_config(is_scalping: bool) -> _AtrSlConfig:
                 sl_buffer_atr=s.scalping_sl_buffer_atr,
                 min_spread_mult=s.scalping_min_spread_mult,
                 max_atr_mult=s.scalping_max_atr_mult,
+                oob_mode=s.sl_oob_mode,
                 tp1_rr=s.scalping_tp1_rr,
                 tp2_rr=s.scalping_tp2_rr,
                 tp3_rr=s.scalping_tp3_rr,
@@ -86,6 +88,7 @@ def get_atr_config(is_scalping: bool) -> _AtrSlConfig:
                 sl_buffer_atr=s.intraday_sl_buffer_atr,
                 min_spread_mult=s.intraday_min_spread_mult,
                 max_atr_mult=s.intraday_max_atr_mult,
+                oob_mode=s.sl_oob_mode,
                 tp1_rr=s.intraday_tp1_rr,
                 tp2_rr=s.intraday_tp2_rr,
                 tp3_rr=s.intraday_tp3_rr,
@@ -254,6 +257,12 @@ def calc_sltp(
                 entry_low=entry_low, entry_high=entry_high, sl=0, tp1=0, tp2=0, tp3=0,
                 method="REJECT", reject_reason="SL_TOO_TIGHT", atr_used=a, sl_dist=sl_dist,
             )
+        # OOB switch: jika swing terlalu jauh & mode atr_fallback, pakai SL ATR murni.
+        # Sinyal tetap keluar dengan label sumber atr_far_swing (untuk perbandingan data).
+        if swing_sl is not None and sl_dist > sl_max and cfg.oob_mode == "atr_fallback":
+            sl_candidate = atr_sl
+            sl_source    = "atr_far_swing"
+            sl_dist      = entry_high - sl_candidate
         if sl_dist > sl_max:
             return SLTPlan(
                 entry_low=entry_low, entry_high=entry_high, sl=0, tp1=0, tp2=0, tp3=0,
@@ -293,6 +302,11 @@ def calc_sltp(
                 entry_low=entry_low, entry_high=entry_high, sl=0, tp1=0, tp2=0, tp3=0,
                 method="REJECT", reject_reason="SL_TOO_TIGHT", atr_used=a, sl_dist=sl_dist,
             )
+        # OOB switch (SELL): jika swing terlalu jauh & mode atr_fallback, pakai SL ATR murni.
+        if swing_sl is not None and sl_dist > sl_max and cfg.oob_mode == "atr_fallback":
+            sl_candidate = atr_sl
+            sl_source    = "atr_far_swing"
+            sl_dist      = sl_candidate - entry_low
         if sl_dist > sl_max:
             return SLTPlan(
                 entry_low=entry_low, entry_high=entry_high, sl=0, tp1=0, tp2=0, tp3=0,

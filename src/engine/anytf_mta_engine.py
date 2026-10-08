@@ -462,7 +462,7 @@ def evaluate_any_tf_mta(
         entry_high=float(plan.entry_high), sl=float(plan.sl),
         tp=float(plan.tp1), tp2=float(plan.tp2), tp3=float(plan.tp3),
         rr=float(rr), rr_tp2_actual=float(rr_tp2_actual or 0.0),
-        sl_method=sl_method, atr_value=float(atr),
+        sl_method=sl_method, atr_value=float(atr), sl_source=plan.sl_source,
         tp1_rr=float(eff_tp1_rr), tp2_rr=float(eff_tp2_rr), tp3_rr=float(eff_tp3_rr),
         trigger_score=trig_score, trigger_max=6, confluence_score=conf_score,
         htf_bias=bias_detail, htf_bias_all=_all_tf_bias(data_by_tf),

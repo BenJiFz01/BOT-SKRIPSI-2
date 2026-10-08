@@ -226,6 +226,8 @@ def _technical_section(sig: Signal) -> list[str]:
         info.append(f"{sess_emoji} {sig.session_name}")
     if sig.atr_value and sig.atr_value > 0:
         info.append(f"ATR {sig.atr_value:.2f}")
+    if sig.sl_source == "atr_far_swing":
+        info.append("SL=atr_fallback (swing jauh)")
     if sig.trigger_notes and sig.trigger_notes.startswith("PULLBACK["):
         info.append(_pullback_summary(sig))
     elif sig.trigger_score and sig.trigger_max:
