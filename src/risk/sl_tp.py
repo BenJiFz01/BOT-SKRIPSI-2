@@ -26,6 +26,7 @@ class _AtrSlConfig:
     min_spread_mult:   float   # min SL = spread × min_spread_mult
     max_atr_mult:      float   # max SL = max_atr_mult × ATR
     oob_mode:          str     # "reject" | "atr_fallback" saat swing terlalu jauh
+    sl_min_points:     float   # SL minimum absolut (hanya scalping, 0.0 jika nonaktif)
     tp1_rr:            float   # TP1 = tp1_rr × sl_dist
     tp2_rr:            float
     tp3_rr:            float
@@ -71,6 +72,7 @@ def get_atr_config(is_scalping: bool) -> _AtrSlConfig:
                 min_spread_mult=s.scalping_min_spread_mult,
                 max_atr_mult=s.scalping_max_atr_mult,
                 oob_mode=s.sl_oob_mode,
+                sl_min_points=s.sl_min_points,
                 tp1_rr=s.scalping_tp1_rr,
                 tp2_rr=s.scalping_tp2_rr,
                 tp3_rr=s.scalping_tp3_rr,
@@ -89,6 +91,7 @@ def get_atr_config(is_scalping: bool) -> _AtrSlConfig:
                 min_spread_mult=s.intraday_min_spread_mult,
                 max_atr_mult=s.intraday_max_atr_mult,
                 oob_mode=s.sl_oob_mode,
+                sl_min_points=0.0,
                 tp1_rr=s.intraday_tp1_rr,
                 tp2_rr=s.intraday_tp2_rr,
                 tp3_rr=s.intraday_tp3_rr,
@@ -113,7 +116,9 @@ class SLTPlan:
     rr_tp2:       float = field(default=0.0)
     rr_tp3:       float = field(default=0.0)
     sl_source:    str   = field(default="")
+    oob_mode_used: str  = field(default="")
     obstacle_tp1: float = field(default=0.0)
+    swing_ratio_before_fallback: float = field(default=0.0)
     reject_reason: str  = field(default="")
 
 
@@ -229,6 +234,8 @@ def calc_sltp(
     sl_max = a * cfg.max_atr_mult
 
     swing_point = _find_swing_point(d, p, df, lookback=40) if df is not None and len(df) >= 50 else None
+    swing_ratio_before = 0.0
+    atr_dist = max(cfg.sl_atr_mult * a, cfg.sl_min_points) if is_scalping else (cfg.sl_atr_mult * a)
     
     if d == "BUY":
         entry_high = p
@@ -241,7 +248,7 @@ def calc_sltp(
         else:
             swing_sl = None
         
-        atr_sl = entry_high - (cfg.sl_atr_mult * a)
+        atr_sl = entry_high - atr_dist
         
         if swing_sl is not None:
             sl_candidate = min(swing_sl, atr_sl)
@@ -252,22 +259,28 @@ def calc_sltp(
         
         sl_dist = entry_high - sl_candidate
         
+        # OOB switch: jika swing terlalu jauh & mode atr_fallback, pakai SL ATR murni.
+        # Sinyal tetap keluar dengan label sumber atr_far_swing (untuk perbandingan data).
+        if swing_sl is not None and sl_dist > sl_max and cfg.oob_mode == "atr_fallback":
+            swing_ratio_before = round(sl_dist / a, 2) if a > 0 else 0.0
+            sl_candidate = atr_sl
+            sl_source    = "atr_far_swing"
+            sl_dist      = entry_high - sl_candidate
+
+        # SETELAH itu cek SL_TOO_TIGHT (dicek ulang setelah fallback):
         if sl_dist < sl_min:
             return SLTPlan(
                 entry_low=entry_low, entry_high=entry_high, sl=0, tp1=0, tp2=0, tp3=0,
                 method="REJECT", reject_reason="SL_TOO_TIGHT", atr_used=a, sl_dist=sl_dist,
+                oob_mode_used=cfg.oob_mode,
             )
-        # OOB switch: jika swing terlalu jauh & mode atr_fallback, pakai SL ATR murni.
-        # Sinyal tetap keluar dengan label sumber atr_far_swing (untuk perbandingan data).
-        if swing_sl is not None and sl_dist > sl_max and cfg.oob_mode == "atr_fallback":
-            sl_candidate = atr_sl
-            sl_source    = "atr_far_swing"
-            sl_dist      = entry_high - sl_candidate
+        # Lalu cek SL_OUT_OF_BOUNDS (mode reject atau jika fallback tetap melebihi sl_max):
         if sl_dist > sl_max:
             return SLTPlan(
                 entry_low=entry_low, entry_high=entry_high, sl=0, tp1=0, tp2=0, tp3=0,
                 method=f"REJECT {d}", reject_reason=f"SL_OUT_OF_BOUNDS(sl={sl_dist:.1f}/max={sl_max:.1f}/atr={a:.1f}/{sl_dist/a:.2f}x)",
-                atr_used=a, sl_dist=sl_dist, sl_source=sl_source,
+                atr_used=a, sl_dist=sl_dist, sl_source=sl_source, oob_mode_used=cfg.oob_mode,
+                swing_ratio_before_fallback=round(swing_ratio_before, 2),
             )
 
         sl = round(entry_high - sl_dist, 5)
@@ -286,7 +299,7 @@ def calc_sltp(
         else:
             swing_sl = None
         
-        atr_sl = entry_low + (cfg.sl_atr_mult * a)
+        atr_sl = entry_low + atr_dist
         
         if swing_sl is not None:
             sl_candidate = max(swing_sl, atr_sl)
@@ -297,21 +310,27 @@ def calc_sltp(
         
         sl_dist = sl_candidate - entry_low
         
+        # OOB switch (SELL): jika swing terlalu jauh & mode atr_fallback, pakai SL ATR murni.
+        if swing_sl is not None and sl_dist > sl_max and cfg.oob_mode == "atr_fallback":
+            swing_ratio_before = round(sl_dist / a, 2) if a > 0 else 0.0
+            sl_candidate = atr_sl
+            sl_source    = "atr_far_swing"
+            sl_dist      = sl_candidate - entry_low
+
+        # SETELAH itu cek SL_TOO_TIGHT (dicek ulang setelah fallback):
         if sl_dist < sl_min:
             return SLTPlan(
                 entry_low=entry_low, entry_high=entry_high, sl=0, tp1=0, tp2=0, tp3=0,
                 method="REJECT", reject_reason="SL_TOO_TIGHT", atr_used=a, sl_dist=sl_dist,
+                oob_mode_used=cfg.oob_mode,
             )
-        # OOB switch (SELL): jika swing terlalu jauh & mode atr_fallback, pakai SL ATR murni.
-        if swing_sl is not None and sl_dist > sl_max and cfg.oob_mode == "atr_fallback":
-            sl_candidate = atr_sl
-            sl_source    = "atr_far_swing"
-            sl_dist      = sl_candidate - entry_low
+        # Lalu cek SL_OUT_OF_BOUNDS:
         if sl_dist > sl_max:
             return SLTPlan(
                 entry_low=entry_low, entry_high=entry_high, sl=0, tp1=0, tp2=0, tp3=0,
                 method=f"REJECT {d}", reject_reason=f"SL_OUT_OF_BOUNDS(sl={sl_dist:.1f}/max={sl_max:.1f}/atr={a:.1f}/{sl_dist/a:.2f}x)",
-                atr_used=a, sl_dist=sl_dist, sl_source=sl_source,
+                atr_used=a, sl_dist=sl_dist, sl_source=sl_source, oob_mode_used=cfg.oob_mode,
+                swing_ratio_before_fallback=round(swing_ratio_before, 2),
             )
 
         sl = round(entry_low + sl_dist, 5)
@@ -338,6 +357,7 @@ def calc_sltp(
     _reject_tp = SLTPlan(
         entry_low=entry_low, entry_high=entry_high, sl=0, tp1=0, tp2=0, tp3=0,
         method="REJECT", reject_reason="TP_ORDER_INVALID", atr_used=a, sl_dist=sl_dist,
+        oob_mode_used=cfg.oob_mode,
     )
     if d == "BUY":
         if not (sl < entry_low < entry_high < tp1 < tp2 < tp3):
@@ -362,6 +382,8 @@ def calc_sltp(
         atr_used=a, sl_dist=sl_dist,
         rr_tp1=round(rr1, 2), rr_tp2=round(rr2, 2), rr_tp3=round(rr3, 2),
         sl_source=sl_source,
+        oob_mode_used=cfg.oob_mode,
+        swing_ratio_before_fallback=round(swing_ratio_before, 2),
     )
 
 

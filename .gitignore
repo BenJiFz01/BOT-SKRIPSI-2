@@ -50,15 +50,14 @@ DEPLOY_CHECKLIST.md
 deploy_to_vps.ps1
 signal_history_backup_before_cleanup.csv
 setup_autostart.ps1
+setup_autologin.ps1
 start_bot.bat
 .kiro/notes/pending_tweaks.md
 .gitignore
 .kiro/notes/reversal_improvement.md
 .kiro/notes/quality_improvement_tweaks.md
-Skripsi Benji.docx
 fix_outcomes.py
 analisis_sweep_fvg.py
-fix_outcomes.py
 assets/smoke_integration.py
 assets/smoke_render_templates.py
-Draft Skrispi_M Dzikri Zen (3).docx
+*.docx

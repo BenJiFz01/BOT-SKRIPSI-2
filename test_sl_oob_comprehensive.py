@@ -45,6 +45,7 @@ def run_plan(direction, price, atr, mode, df):
         min_spread_mult=3.0,
         max_atr_mult=2.0,
         oob_mode=mode,
+        sl_min_points=0.0,
         tp1_rr=1.0,
         tp2_rr=1.5,
         tp3_rr=2.0,

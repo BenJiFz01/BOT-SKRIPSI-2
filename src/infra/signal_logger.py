@@ -23,13 +23,13 @@ CSV_FIELDS = [
     "trigger_notes", "confluence_notes", "pattern_names",
     "fib_detail", "snr_detail", "snd_detail", "divergence_detail",
     "sweep_detail", "fvg_detail",
-    "session_name", "sl_method", "sl_source", "atr_value", "sl_atr_ratio",
-    "entry_spread", "entry_hour",
+    "session_name", "sl_method", "atr_value",
     "outcome", "outcome_price", "outcome_time",
     "tp1_hit_time", "tp2_hit_time", "tp3_hit_time", "sl_hit_time",
-    "breakeven_sl", "trailing_sl",
-    "duration_minutes", "crossed_rollover", "mae_atr", "mfe_atr", "post_sl_tp1_hit",
-    "notes",
+    "duration_minutes", "notes",
+    "sl_source", "sl_oob_mode", "swing_ratio_before_fallback", "sl_atr_ratio",
+    "entry_spread", "entry_hour", "breakeven_sl", "trailing_sl",
+    "crossed_rollover", "mae_atr", "mfe_atr", "post_sl_tp1_hit", "cfg_tag",
 ]
 
 # Field & keyword untuk component accuracy di get_stats()
@@ -96,6 +96,8 @@ class SignalRecord:
     sl_method:         str
     atr_value:         float
     sl_source:         str   = ""
+    sl_oob_mode:       str   = ""
+    swing_ratio_before_fallback: float = 0.0
     sl_atr_ratio:      float = 0.0
     entry_spread:      float = 0.30
     entry_hour:        int   = 0
@@ -105,6 +107,7 @@ class SignalRecord:
     mae_atr:           float = 0.0
     mfe_atr:           float = 0.0
     post_sl_tp1_hit:   str   = ""
+    cfg_tag:           str   = ""
     outcome:           str   = "PENDING"
     outcome_price:     float = 0.0
     outcome_time:      str   = ""
@@ -140,15 +143,22 @@ class SignalLogger:
         if not self.csv_path.exists():
             with open(self.csv_path, "w", newline="", encoding="utf-8") as f:
                 csv.DictWriter(f, fieldnames=CSV_FIELDS).writeheader()
-        elif self.json_path.exists():
-            # Migrasi otomatis jika kolom CSV bertambah
+        else:
             try:
                 with open(self.csv_path, "r", encoding="utf-8") as f:
                     curr_header = f.readline().strip().split(",")
                 if curr_header != CSV_FIELDS:
-                    data = self._load()
-                    if data:
-                        self._rewrite_csv(data)
+                    pre_oob = self.csv_path.parent / (self.csv_path.stem + "_pre_oob.csv")
+                    if not pre_oob.exists():
+                        self.csv_path.rename(pre_oob)
+                    else:
+                        self.csv_path.replace(pre_oob)
+                    with open(self.csv_path, "w", newline="", encoding="utf-8") as f:
+                        csv.DictWriter(f, fieldnames=CSV_FIELDS).writeheader()
+                    if self.json_path.exists():
+                        data = self._load()
+                        if data:
+                            self._rewrite_csv(data)
             except Exception:
                 pass
 
@@ -220,10 +230,13 @@ class SignalLogger:
             session_name      = sig.session_name,
             sl_method         = sig.sl_method,
             sl_source         = getattr(sig, "sl_source", "") or sig.sl_method,
+            sl_oob_mode       = getattr(sig, "sl_oob_mode", ""),
+            swing_ratio_before_fallback = round(getattr(sig, "swing_ratio_before_fallback", 0.0), 2),
             atr_value         = round(sig.atr_value, 4),
             sl_atr_ratio      = round(getattr(sig, "sl_atr_ratio", 0.0), 2),
             entry_spread      = round(getattr(sig, "entry_spread", 0.30), 2),
             entry_hour        = int(getattr(sig, "entry_hour", 0)),
+            cfg_tag           = getattr(sig, "cfg_tag", ""),
             outcome           = "SETUP" if is_setup else "PENDING",
         )
 

@@ -119,6 +119,7 @@ class Settings:
     intraday_min_spread_mult:  float
     intraday_max_atr_mult:     float
     sl_oob_mode:               str
+    sl_min_points:             float
     intraday_tp1_rr:           float
     intraday_tp2_rr:           float
     intraday_tp3_rr:           float
@@ -232,6 +233,7 @@ def load_settings() -> Settings:
         intraday_min_spread_mult  = _getf("INTRADAY_MIN_SPREAD_MULT",  5.0),
         intraday_max_atr_mult     = _getf("INTRADAY_MAX_ATR_MULT",     2.5),
         sl_oob_mode               = _gets_choice("SL_OOB_MODE", "reject", ("reject", "atr_fallback")),
+        sl_min_points             = _getf("SL_MIN_POINTS",             0.0),
         intraday_tp1_rr           = _getf("INTRADAY_TP1_RR",           1.0),
         intraday_tp2_rr           = _getf("INTRADAY_TP2_RR",           2.0),
         intraday_tp3_rr           = _getf("INTRADAY_TP3_RR",           3.0),
@@ -280,6 +282,16 @@ def load_settings() -> Settings:
         range_quality_key_level       = _getb("RANGE_QUALITY_KEY_LEVEL",          True),
     )
     
+    # Validasi SL_MIN_POINTS untuk scalping
+    max_sl_min_allowed = s.scalping_max_atr_mult * s.scalping_atr_min_points
+    if s.sl_min_points < 0:
+        raise ValueError(f"SL_MIN_POINTS={s.sl_min_points:.2f} tidak boleh negatif.")
+    if s.sl_min_points > max_sl_min_allowed:
+        raise ValueError(
+            f"SL_MIN_POINTS={s.sl_min_points:.2f} melebihi batas maksimum "
+            f"SCALPING_MAX_ATR_MULT ({s.scalping_max_atr_mult:.1f}) x SCALPING_ATR_MIN_POINTS ({s.scalping_atr_min_points:.1f}) = {max_sl_min_allowed:.2f} pt"
+        )
+
     # Validasi pengali SL vs Clamp Max (mencegah fallback langsung ditolak clamp)
     if s.scalping_sl_atr_mult >= s.scalping_max_atr_mult:
         raise ValueError(

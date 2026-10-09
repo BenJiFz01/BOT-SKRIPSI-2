@@ -4,6 +4,15 @@ sys.path.insert(0, r"D:\BOT SKRIPSI 2")
 
 import pandas as pd
 from src.risk.sl_tp import calc_sltp
+import src.risk.sl_tp as sl_tp_mod
+
+# Override SL_MIN_POINTS=0.0 untuk tes yang mengasumsikan kalkulasi ATR murni
+sl_tp_mod._CACHE_SCALPING = sl_tp_mod._AtrSlConfig(
+    atr_len=14, sl_atr_mult=1.2, sl_buffer_atr=0.3,
+    min_spread_mult=3.0, max_atr_mult=2.0, oob_mode="reject",
+    sl_min_points=0.0, tp1_rr=1.0, tp2_rr=1.5, tp3_rr=2.0,
+    close_pct=(0.5, 0.3, 0.2),
+)
 
 print("=== TEST SL_TOO_TIGHT REJECTION ===\n")
 

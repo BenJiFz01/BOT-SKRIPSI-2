@@ -203,6 +203,7 @@ def main() -> None:
     logger.info(
         f"PARAMS SCALPING | TP={s.scalping_tp1_rr}R/{s.scalping_tp2_rr}R/{s.scalping_tp3_rr}R "
         f"SL_mult={s.scalping_sl_atr_mult}×ATR clamp=[{s.scalping_min_spread_mult}×spread, {s.scalping_max_atr_mult}×ATR] "
+        f"SL_MIN_POINTS={s.sl_min_points}pt SL_OOB_MODE={s.sl_oob_mode} "
         f"ATR>={s.scalping_atr_min_points}pt spread={s.spread}pt "
         f"OE>={s.scalping_overextend_atr_mult}×ATR "
         f"PB={'ON' if s.scalping_pullback_enabled else 'OFF'} "
@@ -397,6 +398,7 @@ def main() -> None:
                             scalping_pullback_min_trigger= s.scalping_pullback_min_trigger,
                             range_quality_key_level       = s.range_quality_key_level,
                             spread                       = s.spread,
+                            cfg_tag                      = f"atrmin{s.scalping_atr_min_points:.1f}|slmin{s.sl_min_points:.1f}|oob={s.sl_oob_mode}",
                         )
                     except Exception as eval_err:
 # Exception satu TF/candle jangan mematikan seluruh bot — log, skip, lanjut.

@@ -91,6 +91,7 @@ def evaluate_any_tf_mta(
     scalping_pullback_min_trigger: int              = 2,     # floor trigger jalur PULLBACK
     range_quality_key_level:       bool             = True,  # RANGE/sideways: continuation wajib level berkualitas
     spread:                       float            = 0.30,
+    cfg_tag:                      str              = "",
 ) -> Signal | None:
     """Evaluasi sinyal untuk satu (symbol, trigger_tf). Returns Signal jika 5 gate lulus."""
     trigger_tf  = trigger_tf.upper()
@@ -466,6 +467,9 @@ def evaluate_any_tf_mta(
         tp=float(plan.tp1), tp2=float(plan.tp2), tp3=float(plan.tp3),
         rr=float(rr), rr_tp2_actual=float(rr_tp2_actual or 0.0),
         sl_method=sl_method, atr_value=float(atr), sl_source=plan.sl_source,
+        sl_oob_mode=getattr(plan, "oob_mode_used", ""),
+        swing_ratio_before_fallback=float(getattr(plan, "swing_ratio_before_fallback", 0.0) or 0.0),
+        cfg_tag=cfg_tag,
         sl_atr_ratio=_sl_ratio, entry_spread=float(spread), entry_hour=_hr_wib,
         tp1_rr=float(eff_tp1_rr), tp2_rr=float(eff_tp2_rr), tp3_rr=float(eff_tp3_rr),
         trigger_score=trig_score, trigger_max=6, confluence_score=conf_score,

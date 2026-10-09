@@ -121,6 +121,27 @@ class SignalTracker:
         tp3_hit = bool(rec.get("tp3_hit")) or bool(rec.get("tp3_hit_time"))
         early_be = bool(rec.get("early_be_hit", False))
 
+        spread_val = float(rec.get("entry_spread") or rec.get("spread", 0.3) or 0.3)
+        state_updated = False
+        if tp1_hit and be_sl is None:
+            be_sl = round(entry + spread_val, 5) if direction == "BUY" else round(entry - spread_val, 5)
+            state_updated = True
+        if tp2_hit and tr_sl is None:
+            tp1_val = float(rec.get("tp1", 0) or 0)
+            if tp1_val > 0:
+                tr_sl = tp1_val
+                state_updated = True
+        if state_updated:
+            try:
+                self._logger.update_tracker_state(
+                    sid,
+                    breakeven_sl=be_sl,
+                    trailing_sl=tr_sl,
+                    early_be_hit=early_be,
+                )
+            except Exception:
+                pass
+
         min_px = float(rec.get("min_price_seen") or entry)
         max_px = float(rec.get("max_price_seen") or entry)
         if min_px <= 0: min_px = entry
