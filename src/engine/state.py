@@ -112,16 +112,7 @@ def _market_state(
     adx_block:        float,
     adx_gray:         float,
 ) -> tuple[str, str]:
-    """Market State Detector — klasifikasi kondisi pasar untuk dispatch logic.
-
-    Return (state, note) dengan prioritas:
-      TRANSITION > BREAKOUT > HIGH_MOMENTUM > TREND_BULL/BEAR > RANGE > CLEAN.
-    Basis: ADX penentu (H1 utk M5/M15, H4 utk H1) + bias TF sinyal + streak momentum +
-    probe breakout + ekspansi ATR. Murni klasifikasi — GATE & threshold menyesuaikan di
-    pemanggil, fungsi ini TIDAK meloloskan/menolak sinyal.
-
-    Dispatcher engine menukar jalur entry per state (CLEAN → pakai perilaku lama).
-    """
+    """Klasifikasi kondisi pasar (TRANSITION, BREAKOUT, HIGH_MOMENTUM, TREND, RANGE, CLEAN) via ADX & momentum."""
     dec_tf, dec_adx = _decisive_adx_value(trigger_tf, data_by_tf)
     atr   = _atr_proxy(df)
     last  = _latest_closed(df) if len(df) >= 2 else None
@@ -182,14 +173,7 @@ def _ltf_counter_veto(
     direction: str,
     atr:       float,
 ) -> tuple[bool, str]:
-    """Veto defensif simetris: blokir sinyal searah bias HTF saat kaki momentum LTF
-    berlawanan masih UTUH (bukan sekadar 1-2 candle noise).
-
-    SELL di-veto bila kaki bullish utuh: streak bullish ≥2 & impuls ≥1.5×ATR &
-    close masih di atas EMA20. BUY simetris (kaki bearish utuh, close di bawah EMA20).
-    Kaki yang sudah patah (harga kembali di sisi entry) tidak di-veto — top/bottom
-    yang sudah berbalik tetap boleh diambil.
-    """
+    """Veto defensif: blokir sinyal searah bias jika momentum LTF lawan arah masih utuh (streak>=2 & imp>=1.5xATR)."""
     if atr <= 0 or len(df) < 22:
         return False, ""
     direction = direction.upper()

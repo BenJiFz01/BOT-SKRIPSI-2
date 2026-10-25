@@ -24,8 +24,7 @@ _TF_CONFIG: dict[str, _SndConfig] = {
 }
 _TF_CONFIG_DEFAULT = _SndConfig(lookback=200, impulse_body_atr=1.2, base_max_range=0.9, min_impulse_dist=1.2)
 
-# Confluence set per mode (sama pola seperti SNR):
-#   Scalping: H4+H1; Intraday: D1+H4 (D1 untuk validasi zona major intraday)
+# Timeframe konfluensi zona SnD per mode
 _CONFLUENCE_TFS_SCALPING = ("H4", "H1")
 _CONFLUENCE_TFS_INTRADAY = ("D1", "H4")
 

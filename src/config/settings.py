@@ -93,21 +93,21 @@ class Settings:
     scalping_h1_only:     bool
     intraday_require_d1:  bool
 
-    # SL/TP ATR-based (DEPRECATED, legacy intraday)
+    # SL/TP Intraday
     sl_atr_mult:   float
     tp1_rr:        float
     tp2_rr:        float
     tp3_rr:        float
     max_sl_points: float
 
-    # SL/TP Fixed pip (fallback)
+    # SL/TP Fixed pip
     sl_pips:  float
     tp1_pips: float
     tp2_pips: float
     tp3_pips: float
     pip_size: float
 
-    # Pure ATR-based SL/TP (NEW)
+    # SL/TP ATR-based
     spread:                    float
     scalping_atr_len:          int
     scalping_sl_buffer_atr:    float
@@ -163,13 +163,13 @@ class Settings:
     momentum_ema200_tolerance:     float
     range_rejection_enabled:       bool
 
-    # Tuas keketatan
+    # Filter dan threshold
     ltf_veto_enabled:              bool
-    flip_min_trigger:              int    # FLIP wajib trigger >= nilai ini (3 ketat / 2 longgar+struktur)
-    flip_require_key_level:        bool   # FLIP wajib key level (SnR/SnD)
-    h1_require_key_level:          bool   # H1 wajib key level
-    scalping_pullback_min_trigger: int    # floor trigger jalur PULLBACK (default 2)
-    range_quality_key_level:       bool   # RANGE/sideways: continuation wajib key level berkualitas
+    flip_min_trigger:              int
+    flip_require_key_level:        bool
+    h1_require_key_level:          bool
+    scalping_pullback_min_trigger: int
+    range_quality_key_level:       bool
 
 
 def load_settings() -> Settings:

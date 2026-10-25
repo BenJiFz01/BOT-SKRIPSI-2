@@ -1,14 +1,4 @@
-"""sl_tp.py — Stop Loss & Take Profit: ATR-based dengan swing anchor dan clamp.
-
-SL = min(swing_sl, atr_sl) untuk BUY (terjauh dari entry),
-     max(swing_sl, atr_sl) untuk SELL (terjauh dari entry).
-  - swing_sl = pivot ± (buffer_atr × ATR)
-  - atr_sl = entry_high/low ± (sl_atr_mult × ATR) — dari sisi entry yang sama
-  - Clamp: min = spread × min_spread_mult, max = max_atr_mult × ATR
-  
-TP = entry ± (sl_dist × tp_rr), dengan obstacle adjustment TP1/TP2.
-Reject jika SL di luar clamp range.
-"""
+"""sl_tp.py — Stop Loss & Take Profit: dynamic ATR + swing anchor dengan spread & ATR clamp."""
 import math
 from dataclasses import dataclass, field
 from typing import Literal
@@ -351,8 +341,7 @@ def calc_sltp(
         tp2 = round(_adjust_tp_for_obstacle(d, ref_entry, tp2, a, sl_dist, df, min_rr=min_rr_frac * cfg.tp2_rr, spread=s), 5)
         tp3 = round(_adjust_tp_for_obstacle(d, ref_entry, tp3, a, sl_dist, df, min_rr=min_rr_frac * cfg.tp3_rr, spread=s), 5)
 
-    # Validasi urutan TP dan jarak minimum antar TP (0.2R = 20% sl_dist)
-    # Test 1 obstacle kasus: TP1=1.0R, TP2 adjusted=1.22R -> gap=0.22R >= 0.2R (lolos)
+    # Validasi urutan TP dan jarak minimum antar TP (0.2R)
     _min_tp_gap = 0.2 * sl_dist
     _reject_tp = SLTPlan(
         entry_low=entry_low, entry_high=entry_high, sl=0, tp1=0, tp2=0, tp3=0,

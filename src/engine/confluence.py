@@ -27,16 +27,11 @@ def _confluence_score(
     sl:          float = 0.0,
     tp1_rr:      float = 1.5,
     data_by_tf:  dict[str, pd.DataFrame] | None = None,
-    now_utc:     datetime | None = None,   # untuk cek Asian session strictness
-    sweep_enabled: bool = False,  # skalprik: liquidity sweep ikut skor (off → logging-only)
-    fvg_enabled:   bool = False,  # skalprik: FVG ikut skor (off → logging-only)
+    now_utc:       datetime | None = None,
+    sweep_enabled: bool = False,
+    fvg_enabled:   bool = False,
 ) -> tuple[int, str, dict]:
-    """Confluence Score Layer-2 — berbobot sesuai akurasi historis komponen.
-
-    Bobot: Pattern/Fib/Div 1.5, SND 2.0, SNR weighted (0.3x/0.6x/1.0x), Sweep+FVG
-    gabungan 1.0 (scalping saja, OFF → logging-only). Alignment 3+ TF +1.0. Skor
-    float dibulatkan ke int di akhir; minimal threshold dikalibrasi utk skala ini.
-    """
+    """Confluence Score Layer-2: bobot komponen teknikal (Pattern/Fib/Div/SND/SNR/Sweep+FVG)."""
     _W_PATTERN   = 1.5   
     _W_FIB       = 1.5   
     _W_DIV       = 1.5   
@@ -186,9 +181,7 @@ def _confluence_score(
         notes.append("SWEEP_SKIP")
         notes.append("FVG_SKIP")
 
-    # Asian (06:00-14:00 WIB) volatilitas rendah, fake breakout dominan: CONTINUATION
-    # butuh +1 confluence & +1 trigger; sinyal tanpa key level (SNR/SND) direject.
-    # Cek variabel skor, bukan string notes. now_utc dari close_time candle.
+    # Di sesi Asian (volatilitas rendah), wajib ada konfirmasi key level
     asian_session = session_strictness(now_utc, tf=tf) == "RELAXED"
     
     if is_scalping and asian_session:

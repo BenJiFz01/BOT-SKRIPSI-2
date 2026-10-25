@@ -1,9 +1,4 @@
-"""Swing-structure detection buat menangkap awal tren di TF kecil.
-
-Tren jarang lahir langsung dari 1-2 candle impuls; biasanya melalui base/consolidation,
-retracement, lalu break struktur. Layer ini membaca struktur swing (fractal pivot) supaya
-engine tidak buta di fase momentum lemah. Murni klasifikasi berbasis OHLC tertutup.
-"""
+"""Deteksi struktur swing (fractal pivot) berbasis OHLC tertutup untuk tangkap awal tren di TF kecil."""
 
 from __future__ import annotations
 
@@ -44,11 +39,7 @@ def _same_kind_sorted(pivots: list[dict], kind: str, gap: int = 3) -> list[dict]
 
 
 def structure_holds(df: pd.DataFrame, direction: str) -> tuple[bool, str]:
-    """Urutan swing masih mendukung arah: higher-low utk BUY, lower-high utk SELL.
-
-    Dipakai utk anti-flicker: kalau leg momentum sudah patah tapi struktur belum,
-    veto tetap aktif sampai swing yang menopang arah itu benar-benar dipatahkan.
-    """
+    """Anti-flicker veto: tahan arah selama struktur swing (HL=BUY, LH=SELL) belum terpatahkan."""
     direction = direction.upper()
     if direction not in ("BUY", "SELL") or len(df) < 20:
         return False, ""
@@ -75,12 +66,7 @@ def structure_holds(df: pd.DataFrame, direction: str) -> tuple[bool, str]:
 
 
 def structure_break(df: pd.DataFrame, direction: str, atr: float) -> tuple[bool, str]:
-    """Break segar satu level swing terakhir searah arah (early-trend, bukan momentum).
-
-    Persyaratan: close melewati swing terakhir + belum overextended (<=1.2×ATR) supaya
-    masih ketangkap sebagai awal tren, bukan chase. BUY: break swing high; SELL: break
-    swing low.
-    """
+    """Break segar level swing terakhir (close tembus swing & <=1.2xATR anti-chase)."""
     direction = direction.upper()
     if direction not in ("BUY", "SELL") or atr <= 0 or len(df) < 20:
         return False, ""
@@ -110,12 +96,7 @@ def structure_break(df: pd.DataFrame, direction: str, atr: float) -> tuple[bool,
 
 
 def base_breakout(df: pd.DataFrame, direction: str, atr: float) -> tuple[bool, str]:
-    """Base/consolidation sempit yang pecah ke satu arah (awal tren saat momentum lemah).
-
-    Rentang tinggi-rendah 10 candle tertutup <=0.8×ATR, lalu candle tertutup terakhir
-    menembus rentang >=0.3×ATR searah. Momentum tidak wajib kuat di sini — struktur
-    base yang pecah sudah bukti perpindahan.
-    """
+    """Breakout konsolidasi: range 10 candle <=0.8xATR ditembus candle terakhir >=0.3xATR."""
     direction = direction.upper()
     if direction not in ("BUY", "SELL") or atr <= 0 or len(df) < 15:
         return False, ""

@@ -61,7 +61,7 @@ def is_active_session(dt: datetime | None = None, tf: str = "M5") -> bool:
 
     t = to_wib(dt).time()
 
-    # Off session diblokir untuk semua intraday (H4 termasuk, kasus loss 22/09)
+    # Filter jam off session (02:00-06:00 WIB)
     if tf.upper() in ("M5", "M15", "H1", "H4") and _in_off(t):
         return False
 

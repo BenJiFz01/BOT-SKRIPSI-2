@@ -1,9 +1,4 @@
-"""indicators.py — Tambahkan indikator teknikal ke DataFrame OHLCV.
-
-EMA/MA/MACD disesuaikan per TF; nama kolom tetap (ema_20, ema_50, ema_200, macd).
-Fix 2026-09-17: D1 lama (50,200,200) → ema_50 == ema_200 alias identik sehingga
-_bias_from_tf selalu NEUTRAL (D1 tak pernah ikut vote bias).
-"""
+"""indicators.py — Tambahkan indikator teknikal ke DataFrame OHLCV (EMA, MACD, RSI, ATR, ADX per TF)."""
 import pandas as pd
 import talib
 

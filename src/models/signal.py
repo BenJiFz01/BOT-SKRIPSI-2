@@ -33,7 +33,7 @@ class Signal(BaseModel):
     tp2:  float | None = None
     tp3:  float | None = None
     rr:   float | None = None
-    # RR struktural (runner) — acuan gate RR; TP1 scalping ATR-based, RR bisa <1
+    # RR runner TP2
     rr_tp2_actual: float = 0.0
 
     sl_method: str   = "fixed"

@@ -13,13 +13,7 @@ def _trigger_score(
     min_score:          int = 4,
     ema200_tolerance_mult: float = 0.2,
 ) -> tuple[bool, int, str]:
-    """Trigger Score Layer-1 (maks 6): EMA200, EMA50 pullback, EMA alignment, RSI, MACD, Candle.
-
-    ema200_tolerance_mult: lebar band EMA200 (×ATR). Momentum lane memakai nilai lebih
-    besar (default 1.0 via MOMENTUM_EMA200_TOLERANCE) agar tren kuat yang TIDAK menarik
-    kembali ke EMA200 tetap bisa masuk — anti-chase (OVEREXTENSION & LATE_ENTRY) tetap
-    jalan terpisah di gate berikutnya.
-    """
+    """Trigger Score Layer-1 (maks 6): EMA200, EMA50 pullback, EMA alignment, RSI, MACD, Candle."""
     direction = direction.upper()
     notes: list[str] = []
     score = 0
@@ -105,13 +99,7 @@ def _scalp_pullback_setup(
     direction: str,
     atr:       float,
 ) -> tuple[bool, str]:
-    """Set-up pullback/rebound scalping: pause contra-tren sementara di dalam tren,
-    masuk SEARAH tren setelah rebound — bukan "buy the dip".
-
-    Gerbang wajib: trend_tf (bias HTF + EMA20>EMA50 + impuls >=1×ATR), zone (body
-    menembus EMA20 dalam 0.8×ATR), deep (retracement 25-70%; >78.6% = reversal),
-    structure (body tak menembus swing). Konfirmasi min 2/4: rejection (pin/engulf/
-    sweep), rsi, momentum, div. Hanya bar tertutup dipakai."""
+    """Setup pullback scalping searah tren: pause contra-tren, validasi zone/deep/structure & min 2/4 konfirmasi."""
     direction = direction.upper()
     if len(df) < 40:
         return False, "TOO_FEW_BARS"
@@ -189,12 +177,7 @@ def _range_rejection_setup(
     df:  pd.DataFrame,
     atr: float,
 ) -> tuple[str | None, str, int]:
-    """RANGE lane (2026-09-24): sideways + rejection, tanpa gate tren.
-
-    Sekadar candle rejection (pin/engulf/sweep) + RSI + momentum di kedua arah — pilih
-    arah dgn skor tertinggi, min 2 dari 3. Key level (SnR/SnD) BUKAN di sini tapi di
-    GATE 5: tanpa key level, konfluensi tak sampai 2 (dan ASIAN langsung reject).
-    Returns (direction|None, note, score)."""
+    """RANGE lane: sideways + rejection (pin/engulf/sweep, RSI, momentum), min 2/3 konfirmasi."""
     if df is None or len(df) < 30 or atr <= 0:
         return None, "TOO_FEW_BARS", 0
     need = {"open", "close", "high", "low"}
@@ -246,11 +229,7 @@ def _has_key_level(conf_notes: str) -> bool:
 
 
 def _has_quality_key_level(conf_notes: str) -> bool:
-    """True jika ada key level BERKUALITAS: SnR 3-touch+ (SnR_MED/SnR+) atau FIB_GOLDEN.
-
-    SnR_WEAK (2-touch, akurasi historis ~31.6%) TIDAK dihitung — level lemah adalah
-    kandidat stop-hunt (kasus loss 30/09 12:00: BUY 5/6 di RANGE dgn SnR_WEAK, SL
-    disapu lalu harga lanjut naik; semua WIN hari itu punya SnR 3-touch + FIB_GOLDEN)."""
+    """True jika ada level kuat: SnR 3+ touch (SnR_MED/SnR+) atau FIB_GOLDEN."""
     return any(k in conf_notes for k in ("SnR_MED", "SnR+", "FIB_GOLDEN"))
 
 

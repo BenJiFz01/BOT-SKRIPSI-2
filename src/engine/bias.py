@@ -98,9 +98,7 @@ def _momentum_recovery_bias(
     df_scalp: pd.DataFrame,
     df_h1:    pd.DataFrame | None,
 ) -> tuple[str | None, str]:
-    """Deteksi momentum recovery scalping saat H1 NEUTRAL — sistem skor min 3 dari 4
-    (slope ≥60%, impulse >1.5×ATR, rsi searah, h1_ok EMA50 H1 tak berlawanan), bukan
-    wajib semua. Returns (bias, detail) utk log vote bias."""
+    """Deteksi momentum recovery scalping saat H1 NEUTRAL (skor min 3/4)."""
     if len(df_scalp) < 30:
         return None, "TOO_FEW_BARS"
 
@@ -176,9 +174,7 @@ def _vote_bias(
     scalping_h1_only:  bool = True,
     intraday_require_d1: bool = True,
 ) -> tuple[str | None, str]:
-    """Vote bias HTF: required_tf (H1 utk M5/M15, H4(+D1) utk intraday) harus punya bias
-    jelas + min_confirm_votes sepakat. Scalping cukup H1 saja (data: H4 menekan WR 60%
-    vs 72% saat netral). H1 NEUTRAL → coba momentum recovery. Returns (bias, detail)."""
+    """Voting bias HTF: evaluasi kesepakatan arah dari timeframe lebih tinggi (H1/H4/D1)."""
     trigger_up = trigger_tf.upper()
     is_scalping_tf = trigger_up in ("M5", "M15")
 

@@ -255,9 +255,7 @@ def main() -> None:
         except Exception as e:
             logger.warning(f"Alert offline gagal: {e}")
 
-    # Heartbeat ke Healthchecks.io — sinyal "masih hidup" dikirim keluar VPS
-    # tiap MENIT_HEARTBEAT menit. Jika VPS crash/bot mati, ping berhenti dan
-    # Healthchecks.io otomatis mengirim alert ke Telegram.
+    # Heartbeat monitoring ke Healthchecks.io
     heartbeat_url  = s.healthcheck_ping_url.strip()
     heartbeat_ts   = 0.0
     HEARTBEAT_INTERVAL = 60.0  # 60 detik → Healthchecks Period=5m & Grace=5m aman
@@ -321,8 +319,7 @@ def main() -> None:
                         last_events[tf_u] = event
 
                 if not last_events:
-                    continue   # tidak ada candle close — lanjut ke symbol berikutnya
-                               # TANPA sleep terpisah; satu-satunya sleep ada di bawah while True
+                    continue
 
                 bid, ask = _get_mt5_tick(symbol)
                 tfs_closing = ", ".join(last_events.keys())
@@ -401,7 +398,7 @@ def main() -> None:
                             cfg_tag                      = f"atrmin{s.scalping_atr_min_points:.1f}|slmin{s.sl_min_points:.1f}|oob={s.sl_oob_mode}",
                         )
                     except Exception as eval_err:
-# Exception satu TF/candle jangan mematikan seluruh bot — log, skip, lanjut.
+                        # Tangani error evaluasi per timeframe agar bot tetap berjalan
                         logger.error(f"[EVAL ERROR] {symbol} {tf_u_norm}: {eval_err}", exc_info=True)
                         continue
 

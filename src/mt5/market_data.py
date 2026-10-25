@@ -1,9 +1,4 @@
-﻿"""market_data.py — Ambil data OHLCV dari MetaTrader 5.
-
-PENTING — MT5 copy_rates mengembalikan timestamp zona waktu SERVER (bukan UTC);
-ofset dideteksi otomatis dari jam tick server vs UTC nyata, override via env
-MT5_SERVER_UTC_OFFSET_HOURS (dalam jam, mis. 3 untuk UTC+3).
-"""
+﻿"""market_data.py — Pengambilan data OHLCV dari MetaTrader 5 dan normalisasi timestamp ke UTC."""
 
 import os
 import time

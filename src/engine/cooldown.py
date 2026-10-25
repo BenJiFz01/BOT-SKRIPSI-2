@@ -10,29 +10,24 @@ import pandas as pd
 
 _LAST_SIGNAL_TIME: dict[tuple[str, str], pd.Timestamp] = {}
 
-# Conflict resolver — state lintas-TF per (symbol, direction); anti-spam arah-sama.
-# key=(symbol,direction) → (epoch_second_emit, confluence_score_terakhir). Dedup ADITIF, tak ubah skor/gate/threshold.
+# Cache sinyal terakhir per arah untuk mencegah duplikasi sinyal dalam 30 menit
 _LAST_LIVE_EMIT: dict[tuple[str, str], tuple[float, float]] = {}
-_CONFLICT_WINDOW_SEC: float = 30 * 60  # 30 menit window anti-duplikat arah-sama lintas-TF
+_CONFLICT_WINDOW_SEC: float = 30 * 60
 
-# Circuit breaker disabled — functions kept for backward compat.
-
+# Circuit breaker tracking
 _CONSEC_LOSS: dict[str, dict] = {}
 _CONSEC_LOSS_DATE: dict[str, str] = {}
 
 
 def record_loss(symbol: str) -> None:
-    """Disabled - kept for backward compatibility."""
     pass
 
 
 def reset_consec_loss(symbol: str) -> None:
-    """Disabled - kept for backward compatibility."""
     pass
 
 
 def get_consec_loss_count(symbol: str) -> int:
-    """Always return 0 - circuit breaker disabled."""
     return 0
 
 # Cooldown persistence

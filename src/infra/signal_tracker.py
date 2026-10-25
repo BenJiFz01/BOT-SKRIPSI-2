@@ -45,7 +45,7 @@ class TrackedSignal:
     min_price_seen: float = 0.0
     max_price_seen: float = 0.0
     crossed_rollover: bool = False
-    # Observasi 12 bar M5 (60 menit) pasca-SL
+    # Monitoring pasca-SL
     post_sl_monitoring: bool = False
     post_sl_expiry: datetime | None = None
     post_sl_tp1_hit: bool | None = None

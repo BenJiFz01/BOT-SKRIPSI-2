@@ -1,8 +1,4 @@
-"""liquidity_sweep.py — Deteksi liquidity sweep (stop-hunt) untuk konfluensi scalping.
-
-Wick menembus swing high/low (kena kluster SL) lalu close kembali ke dalam range
-sebelum entry — menjawab masalah "SL kena wick dulu baru profit". Swing dari swing_utils.
-"""
+"""liquidity_sweep.py — Deteksi liquidity sweep (stop-hunt) untuk konfluensi scalping."""
 from __future__ import annotations
 
 import pandas as pd
@@ -11,8 +7,8 @@ from src.features.swing_utils import swing_high_idx_prices, swing_low_idx_prices
 
 
 _LOOKBACK_BARS    = 30   # jarak max swing yang dipertimbangkan dari now (bar)
-_MIN_WICK_RATIO   = 0.30 # fraksi minimum range candle yang menembus level (0.5->0.3, 2026-09-24)
-_RECENT_BARS      = 10   # candle sweep harus dalam N bar terakhir (closed) (6->10, 2026-09-24)
+_MIN_WICK_RATIO   = 0.30  # fraksi minimum range candle yang menembus level
+_RECENT_BARS      = 10    # candle sweep dalam N bar terakhir tertutup
 _PIVOT_WINDOW     = 3    # window pivot swing (konsisten dengan swing_utils)
 
 
@@ -22,11 +18,7 @@ def detect_liquidity_sweep(
     lookback:       int  = _LOOKBACK_BARS,
     min_wick_ratio: float = _MIN_WICK_RATIO,
 ) -> tuple[bool, dict]:
-    """Deteksi liquidity sweep di bar tertutup terakhir (bar terakhir = live, dilewati).
-
-    'BUY'  → sweep di bawah swing low; 'SELL' → sweep di atas swing high (wick
-    menembus lalu close kembali ke range). Returns (swept, info{level, wick_ratio, bars_ago}).
-    """
+    """Deteksi sweep di swing high/low bar tertutup: wick tembus lalu close kembali ke range."""
     direction = direction.upper().strip()
     if len(df) < 12:
         return False, {}

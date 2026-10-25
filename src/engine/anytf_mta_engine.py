@@ -83,13 +83,12 @@ def evaluate_any_tf_mta(
     market_transition_adx_gray:    float            = 25.0,
     scalping_h1_only:              bool             = True,
     intraday_require_d1:           bool             = True,
-    # Tuas keketatan/reaksi (A/B testing tanpa ubah kode).
-    ltf_veto_enabled:              bool             = True,  # VETO + FLIP lane menyala
-    flip_min_trigger:              int              = 3,     # FLIP wajib trigger >= ini
-    flip_require_key_level:        bool             = True,  # FLIP wajib key level
-    h1_require_key_level:          bool             = True,  # H1 wajib key level
-    scalping_pullback_min_trigger: int              = 2,     # floor trigger jalur PULLBACK
-    range_quality_key_level:       bool             = True,  # RANGE/sideways: continuation wajib level berkualitas
+    ltf_veto_enabled:              bool             = True,
+    flip_min_trigger:              int              = 3,
+    flip_require_key_level:        bool             = True,
+    h1_require_key_level:          bool             = True,
+    scalping_pullback_min_trigger: int              = 2,
+    range_quality_key_level:       bool             = True,
     spread:                       float            = 0.30,
     cfg_tag:                      str              = "",
 ) -> Signal | None:
@@ -176,7 +175,7 @@ def evaluate_any_tf_mta(
         eff_trig += 1
         eff_conf += 1
 
-    # H1: +1 trig & +1 conf (WR historis 19% tanpa hardening)
+    # H1: butuh konfirmasi skor lebih ketat
     if trigger_tf == "H1":
         eff_trig += 1
         eff_conf += 1
@@ -300,8 +299,7 @@ def evaluate_any_tf_mta(
             _reject(df_t, f"BIAS_FAIL({bias_detail}) state={market_state}({state_note})")
             return None
 
-    # LTF veto + flip lane: blokir sinyal searah bias saat momentum LTF berlawanan utuh,
-    # evaluasi flip ke arah lawan dengan gate ketat (trigger + key level di GATE 5).
+    # LTF veto: tahan sinyal searah bias jika momentum TF kecil berlawanan
     if direction in ("BUY", "SELL") and not (_pb_active or _range_active or _is_counter) and ltf_veto_enabled:
         _opp = "BUY" if direction == "SELL" else "SELL"
         _vetoed, _veto_note = _ltf_counter_veto(df_t, direction, atr)
@@ -390,7 +388,7 @@ def evaluate_any_tf_mta(
         _reject(df_t, f"RANGE_NO_KEY_LEVEL[{conf_notes}]")
         return None
 
-    # H1 wajib key level (WR historis 19% tanpa gate ini)
+    # H1 wajib terkonfirmasi key level
     if trigger_tf == "H1" and h1_require_key_level and not _has_key_level(conf_notes):
         _reject(df_t, f"H1_NO_KEY_LEVEL[{conf_notes}]")
         return None
@@ -427,7 +425,7 @@ def evaluate_any_tf_mta(
             if _over > _oe_max:
                 _reject(df_t, f"OVEREXTENSION(ema20_dist={_over:.2f}/max={_oe_max:.2f})"); return None
 
-    # Dedup lintas-TF: kirim duplikat arah-sama hanya bila konfluensi lebih tinggi
+    # Anti-duplikasi sinyal arah sama lintas timeframe
     _conf_key   = (symbol, direction)
     _now_ts     = close_time_ts.timestamp()
     _curr_conf  = float(conf_score)

@@ -73,7 +73,7 @@ _CATEGORY: dict[str, str] = {
     "SL_TOO_TIGHT":          "SL_TOO_TIGHT",
 }
 
-# Hint tuning per kategori dominan
+# Penjelasan kategori penolakan sinyal
 _HINT: dict[str, str] = {
     "EMA200_WAJIB": (
         "Harga sedang di sisi salah EMA200 LTF — kemungkinan koreksi dalam trend HTF. "
