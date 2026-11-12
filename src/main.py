@@ -17,6 +17,8 @@ from src.config.settings import load_settings
 from src.engine.anytf_mta_engine import evaluate_any_tf_mta
 from src.features.indicators import add_indicators
 from src.features.patterns import add_patterns
+from src.features.news_filter import fetch_news_events, format_news_summary, is_news_blackout
+from src.features.session import is_active_session
 from src.infra.logger import setup_logger
 from src.infra.reject_tracker import RejectTracker
 from src.infra.report.generator import generate_report
@@ -24,8 +26,8 @@ from src.infra.health_server import HealthServer
 from src.infra.scheduler import CandleCloseWatcher
 from src.infra.signal_logger import SignalLogger
 from src.infra.signal_tracker import SignalTracker
-from src.mt5.connector import connect, shutdown
-from src.mt5.market_data import ensure_symbol, fetch_ohlc
+from src.mt5.connector import connect, shutdown, is_connected, ensure_connected
+from src.mt5.market_data import ensure_symbol, fetch_ohlc, check_feed_stale
 from src.notify.telegram import send_message
 from src.notify.templates import format_signal
 
@@ -129,9 +131,16 @@ def _short_reject(raw: str) -> str:
         rr  = re.search(r"rr=([0-9.None]+)", raw)
         mn  = re.search(r"min=([0-9.]+)", raw)
         return f"RR terlalu rendah: {rr.group(1) if rr else '?'} (min {mn.group(1) if mn else '?'})"
+    if u.startswith("NEWS_BLACKOUT"):
+        title = _extract(raw, "(", "|") or _extract(raw, "(", ")")
+        diff = re.search(r"diff=([+-]?[0-9.]+)m", raw)
+        diff_str = f" ({diff.group(1)}m)" if diff else ""
+        return f"News Blackout: {title or 'USD News'}{diff_str}"
+    if u.startswith("BROKER_FEED_STALE"):
+        lag = re.search(r"lag=([0-9.]+)s", raw)
+        return f"Broker Freeze: Kuotasi macet ({lag.group(1)}s)" if lag else "Broker Freeze: Kuotasi macet"
     if u.startswith("SLTP_NONE"):
         return "SL/TP tidak dapat dihitung"
-
     return raw.split(":")[0]
 
 
@@ -277,7 +286,9 @@ def main() -> None:
         acc = connect(s.mt5_login, s.mt5_password, s.mt5_server, s.mt5_terminal_path)
         logger.info(f"MT5 terhubung | login={acc.login} server={acc.server}")
         tracker.start()
-
+        if s.news_filter_enabled:
+            fetch_news_events()
+            logger.info("News Filter aktif (Forex Factory USD High-Impact)")
         send_message(
             s.telegram_token, s.telegram_chat_id,
             (
@@ -294,12 +305,62 @@ def main() -> None:
                 f"| SLM5<={s.max_sl_m5}pt | ATR>={s.scalping_atr_min_points}pt | OE>={s.scalping_overextend_atr_mult}×ATR "
                 f"| PB={'ON' if s.scalping_pullback_enabled else 'OFF'} "
                 f"| Trig>={s.scalping_min_trigger_score} | Conf>={s.scalping_min_confluence_score}\n"
-                f"Session  : {'ON' if s.session_filter else 'OFF'}\n"
+                f"Session  : {'ON' if s.session_filter else 'OFF'} | "
+                f"News: {'ON (' + s.news_currency + ' ' + ','.join(s.news_impact_levels) + ' ±' + str(s.news_buffer_before_min) + 'm)' if s.news_filter_enabled else 'OFF'}\n"
                 f"Tracker  : ON ({tracker.get_active_count()} sinyal pending)"
             ),
         )
 
+        _news_blackout_notified: set[str] = set()
+        _last_morning_briefing_date: str = ""
+        _last_stale_reconnect_time: float = 0.0
+        _STALE_RECONNECT_COOLDOWN_SEC: float = 120.0
+
         while True:
+            # Watchdog Koneksi MT5 (Auto-Reconnect jika terminal freeze / putus)
+            if not is_connected():
+                logger.warning("Koneksi MT5 terputus/freeze! Memulai auto-reconnect...")
+                if ensure_connected(s.mt5_login, s.mt5_password, s.mt5_server, s.mt5_terminal_path):
+                    logger.info("Koneksi MT5 berhasil dipulihkan secara otomatis.")
+                else:
+                    logger.error("Auto-reconnect MT5 gagal. Menunggu sebelum mencoba kembali...")
+                    time.sleep(s.poll_seconds)
+                    continue
+
+            # Morning News Briefing jam 07:00-08:00 WIB (sekali per hari)
+            if s.news_filter_enabled:
+                _wib_now = datetime.now(pytz.timezone("Asia/Jakarta"))
+                _today_str = _wib_now.strftime("%Y-%m-%d")
+                if _today_str != _last_morning_briefing_date and (7 <= _wib_now.hour <= 8):
+                    _last_morning_briefing_date = _today_str
+                    try:
+                        # Paksa refresh feed online saat pagi hari agar jadwal hari ini 100% akurat
+                        fetch_news_events(force=True)
+                        _briefing = format_news_summary(
+                            dt=datetime.now(pytz.UTC),
+                            hours_ahead=18.0,
+                            currency=s.news_currency,
+                            impact_levels=s.news_impact_levels,
+                        )
+                        _hari_id = {
+                            "Monday": "Senin", "Tuesday": "Selasa", "Wednesday": "Rabu",
+                            "Thursday": "Kamis", "Friday": "Jumat", "Saturday": "Sabtu", "Sunday": "Minggu"
+                        }.get(_wib_now.strftime("%A"), _wib_now.strftime("%A"))
+                        _tgl_str = f"{_hari_id}, {_wib_now.strftime('%d %B %Y')}"
+
+                        send_message(
+                            s.telegram_token, s.telegram_chat_id,
+                            (
+                                f"🌅 <b>MORNING ECONOMIC BRIEFING</b>\n\n"
+                                f"Hari / Tgl : <code>{_tgl_str}</code>\n\n"
+                                f"{_briefing}\n\n"
+                                f"<i>Sistem otomatis menahan sinyal ±{s.news_buffer_before_min} menit sebelum & sesudah berita.</i>"
+                            ),
+                        )
+                        logger.info(f"Morning briefing berita terkirim ke Telegram ({_tgl_str})")
+                    except Exception as _br_err:
+                        logger.warning(f"Gagal mengirim morning briefing: {_br_err}")
+
             for symbol in s.symbols:
                 ensure_symbol(symbol)
 
@@ -327,6 +388,45 @@ def main() -> None:
                 reject_tracker.record_candle()
                 signal_count = 0
 
+                # Manajemen Notifikasi News Blackout Terpusat (Aktif & Selesai)
+                if s.news_filter_enabled:
+                    _bo_active, _bo_info = is_news_blackout(
+                        dt=datetime.now(pytz.UTC),
+                        buffer_before_min=s.news_buffer_before_min,
+                        buffer_after_min=s.news_buffer_after_min,
+                        currency=s.news_currency,
+                        impact_levels=s.news_impact_levels,
+                    )
+                    if _bo_active and _bo_info:
+                        _ev_key = _bo_info.get("title", "News")
+                        if _ev_key not in _news_blackout_notified:
+                            _news_blackout_notified.add(_ev_key)
+                            _wib_tz = pytz.timezone("Asia/Jakarta")
+                            _now_wib = datetime.now(pytz.UTC).astimezone(_wib_tz).strftime("%H:%M WIB")
+                            send_message(
+                                s.telegram_token, s.telegram_chat_id,
+                                (
+                                    f"📰 <b>NEWS BLACKOUT AKTIF</b>\n\n"
+                                    f"Event    : <b>{_ev_key}</b>\n"
+                                    f"Impact   : <code>USD High</code>\n"
+                                    f"Buffer   : ±{s.news_buffer_before_min} menit\n"
+                                    f"Waktu    : <code>{_now_wib}</code>\n\n"
+                                    f"⏸ Sinyal ditahan hingga jendela blackout selesai."
+                                ),
+                            )
+                            logger.info(f"Notifikasi blackout terkirim ke Telegram: {_ev_key}")
+                    elif not _bo_active and _news_blackout_notified:
+                        _cleared = ", ".join(_news_blackout_notified)
+                        _news_blackout_notified.clear()
+                        send_message(
+                            s.telegram_token, s.telegram_chat_id,
+                            (
+                                f"✅ <b>NEWS BLACKOUT SELESAI</b>\n\n"
+                                f"Event    : {_cleared}\n"
+                                f"Status   : Sinyal kembali aktif."
+                            ),
+                        )
+                        logger.info(f"News blackout selesai: {_cleared}")
                 for tf_u in last_events:
                     tf_u_norm = tf_u.upper()
                     enabled_u = [t.upper() for t in s.timeframes]
@@ -337,6 +437,23 @@ def main() -> None:
                         "D1":  s.max_sl_d1,
                     }
                     _max_sl = _sl_cap.get(tf_u_norm, s.max_sl_points)
+                    # Cek apakah feed kuotasi broker freeze/stale sebelum analisa
+                    _feed_stale = False
+                    _feed_lag = 0.0
+                    if is_active_session(datetime.now(pytz.utc), tf=tf_u_norm):
+                        _feed_stale, _feed_lag = check_feed_stale(symbol, max_lag_sec=60)
+                        if _feed_stale:
+                            logger.warning(
+                                f"[FEED FREEZE] Kuotasi {symbol} macet (lag={_feed_lag:.0f}s > 60s) saat sesi aktif!"
+                            )
+                            _now_sec = time.time()
+                            if _now_sec - _last_stale_reconnect_time > _STALE_RECONNECT_COOLDOWN_SEC:
+                                _last_stale_reconnect_time = _now_sec
+                                logger.info("Mencoba auto-reconnect MT5 untuk me-refresh kuotasi data yang macet...")
+                                if ensure_connected(s.mt5_login, s.mt5_password, s.mt5_server, s.mt5_terminal_path):
+                                    logger.info("Koneksi MT5 berhasil di-refresh setelah kuotasi macet.")
+                                else:
+                                    logger.warning("Auto-reconnect MT5 saat kuotasi macet belum berhasil.")
 
                     try:
                         sig = evaluate_any_tf_mta(
@@ -395,6 +512,13 @@ def main() -> None:
                             scalping_pullback_min_trigger= s.scalping_pullback_min_trigger,
                             range_quality_key_level       = s.range_quality_key_level,
                             spread                       = s.spread,
+                            news_filter_enabled          = s.news_filter_enabled,
+                            news_buffer_before_min       = s.news_buffer_before_min,
+                            news_buffer_after_min        = s.news_buffer_after_min,
+                            news_impact_levels           = s.news_impact_levels,
+                            news_currency                = s.news_currency,
+                            broker_feed_stale            = _feed_stale,
+                            broker_feed_lag              = _feed_lag,
                             cfg_tag                      = f"atrmin{s.scalping_atr_min_points:.1f}|slmin{s.sl_min_points:.1f}|oob={s.sl_oob_mode}",
                         )
                     except Exception as eval_err:
@@ -408,6 +532,10 @@ def main() -> None:
                         logger.info(f"{symbol} {tf_u_norm:<3} ✗  {_short_reject_with_df(raw, df_cur)}")
                         logger.debug(f"{tf_u_norm} raw: {raw[:200]}")
                         reject_tracker.record_reject(symbol=symbol, tf=tf_u_norm, raw=raw, df=df_cur)
+
+                        # Log reject jika terjadi news blackout
+                        if raw.startswith("NEWS_BLACKOUT") and s.news_filter_enabled:
+                            logger.debug(f"Sinyal {symbol} {tf_u_norm} ditolak karena: {raw}")
                     else:
                         signal_count += 1
                         signal_id = sig_logger.log_signal(sig)

@@ -54,6 +54,7 @@ _CATEGORY: dict[str, str] = {
     "ATR_DATA_INSUFFICIENT": "DATA_KURANG",
     "TP_ORDER_INVALID":   "SLTP_ERROR",
     "NEWS_SPIKE_SKIP":    "NEWS_SPIKE",
+    "NEWS_BLACKOUT":      "NEWS_BLACKOUT",
     "NOT_ENOUGH_BARS":    "DATA_KURANG",
     "COOLDOWN":           "COOLDOWN",
     "SLTP_NONE":          "SLTP_ERROR",
@@ -71,10 +72,15 @@ _CATEGORY: dict[str, str] = {
     "RANGE_NO_REJECTION":    "RANGE_NO_REJECTION",
     "SL_OUT_OF_BOUNDS":      "SL_OUT_OF_BOUNDS",
     "SL_TOO_TIGHT":          "SL_TOO_TIGHT",
+    "BROKER_FEED_STALE":     "BROKER_FREEZE",
 }
 
 # Penjelasan kategori penolakan sinyal
 _HINT: dict[str, str] = {
+    "BROKER_FREEZE": (
+        "Kuotasi harga broker lokal membeku (stale quote) atau tidak ada tick baru > 60 detik "
+        "saat sesi pasar aktif. Sinyal ditahan demi mencegah analisa dari data harga usang/freeze."
+    ),
     "EMA200_WAJIB": (
         "Harga sedang di sisi salah EMA200 LTF — kemungkinan koreksi dalam trend HTF. "
         "Ini normal. Tunggu harga kembali di atas/bawah EMA200, atau cek apakah HTF bias masih valid."
@@ -117,6 +123,10 @@ _HINT: dict[str, str] = {
     ),
     "COOLDOWN":    "Cooldown normal antar sinyal. Tidak perlu tuning.",
     "NEWS_SPIKE":  "Spike news — sistem sengaja skip. Benar.",
+    "NEWS_BLACKOUT": (
+        "Sinyal ditahan karena berada dalam jendela waktu rilis berita ekonomi berdampak tinggi (High-Impact USD). "
+        "Filter ini melindungi sistem dari lonjakan spread dan volatilitas liar."
+    ),
     "DATA_KURANG": "Data bar belum cukup — tunggu lebih banyak candle terkumpul.",
     "SLTP_ERROR":  "SL/TP gagal dihitung — kemungkinan data price bermasalah. Cek koneksi MT5.",
     "OUT_OF_SESSION": (

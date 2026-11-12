@@ -128,6 +128,13 @@ class Settings:
     # Session filter
     session_filter: bool
 
+    # News filter
+    news_filter_enabled:    bool
+    news_buffer_before_min: int
+    news_buffer_after_min:  int
+    news_impact_levels:     list[str]
+    news_currency:          str
+
     # Counter trend
     counter_trend_enabled:  bool
     min_counter_confluence: int
@@ -240,6 +247,12 @@ def load_settings() -> Settings:
         obstacle_min_rr_frac      = _getf("OBSTACLE_MIN_RR_FRAC",      0.8),
 
         session_filter = _getb("SESSION_FILTER", True),
+
+        news_filter_enabled    = _getb("NEWS_FILTER_ENABLED", True),
+        news_buffer_before_min = _geti("NEWS_BUFFER_BEFORE_MIN", 30),
+        news_buffer_after_min  = _geti("NEWS_BUFFER_AFTER_MIN", 30),
+        news_impact_levels     = [x.strip() for x in _get("NEWS_IMPACT_LEVELS", "High").split(",") if x.strip()],
+        news_currency          = _get("NEWS_CURRENCY", "USD").upper().strip(),
 
         counter_trend_enabled  = _getb("COUNTER_TREND_ENABLED",  True),
         min_counter_confluence = _geti("MIN_COUNTER_CONFLUENCE",  3),

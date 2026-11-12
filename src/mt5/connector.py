@@ -27,6 +27,45 @@ def connect(login: int, password: str, server: str, terminal_path: str = "") -> 
         raise RuntimeError(f"MT5 account_info gagal: {mt5.last_error()}")
     return info
 
+def is_connected() -> bool:
+    """Cek apakah terminal MT5 aktif dan terhubung ke server broker."""
+    try:
+        t = mt5.terminal_info()
+        if t is None or not getattr(t, "connected", False):
+            return False
+        acc = mt5.account_info()
+        return acc is not None and getattr(acc, "login", 0) > 0
+    except Exception:
+        return False
+
+
+def ensure_connected(
+    login: int,
+    password: str,
+    server: str,
+    terminal_path: str = "",
+    max_retries: int = 3,
+    retry_delay: float = 3.0,
+) -> bool:
+    """Pastikan koneksi MT5 aktif; jika terputus/freeze, lakukan reconnect otomatis."""
+    if is_connected():
+        return True
+
+    import time
+    for attempt in range(1, max_retries + 1):
+        try:
+            shutdown()
+            time.sleep(1.0)
+            connect(login, password, server, terminal_path)
+            if is_connected():
+                return True
+        except Exception:
+            pass
+        if attempt < max_retries:
+            time.sleep(retry_delay)
+    return False
+
+
 def shutdown() -> None:
     """Tutup koneksi MT5 dengan aman."""
     try:

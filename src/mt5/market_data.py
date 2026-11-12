@@ -66,3 +66,25 @@ def ensure_symbol(symbol: str) -> None:
     """Pastikan simbol tersedia di Market Watch MT5."""
     if not mt5.symbol_select(symbol, True):
         raise RuntimeError(f"Gagal memilih simbol {symbol}: {mt5.last_error()}")
+
+
+def check_feed_stale(symbol: str, max_lag_sec: int = 60) -> tuple[bool, float]:
+    """Cek apakah kuotasi harga broker mengalami freeze (stale quotes).
+
+    Returns:
+        (is_stale, lag_seconds)
+    """
+    try:
+        tick = mt5.symbol_info_tick(symbol)
+        if tick is None or not getattr(tick, "time", 0):
+            return True, 999.0
+
+        offset = _server_utc_offset_seconds(symbol)
+        tick_utc = tick.time - offset
+        now_utc = time.time()
+        lag = now_utc - tick_utc
+        if lag > max_lag_sec:
+            return True, lag
+        return False, max(0.0, lag)
+    except Exception:
+        return True, 999.0

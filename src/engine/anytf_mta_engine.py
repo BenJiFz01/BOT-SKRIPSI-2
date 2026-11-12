@@ -6,7 +6,7 @@ setup_plan/cooldown/utils). Simbol publik tetap re-export dari sini.
 """
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timedelta
 
 import pandas as pd
 import pytz
@@ -28,6 +28,7 @@ from src.engine.structure import structure_holds, structure_trend_start
 from src.engine.trigger import _has_key_level, _has_quality_key_level, _range_rejection_setup, _scalp_pullback_setup, _trigger_score
 from src.engine.utils import _atr_proxy, _latest_closed, _reject, calc_rr
 from src.features.entry_setup import classify_entry_setup
+from src.features.news_filter import is_news_blackout
 from src.features.session import is_active_session, session_name, session_strictness
 from src.models.signal import Signal
 from src.risk.sl_tp import swing_based_sltp
@@ -90,6 +91,13 @@ def evaluate_any_tf_mta(
     scalping_pullback_min_trigger: int              = 2,
     range_quality_key_level:       bool             = True,
     spread:                       float            = 0.30,
+    news_filter_enabled:          bool             = False,
+    news_buffer_before_min:       int              = 30,
+    news_buffer_after_min:        int              = 30,
+    news_impact_levels:           list[str] | tuple[str, ...] = ("High",),
+    news_currency:                str              = "USD",
+    broker_feed_stale:            bool             = False,
+    broker_feed_lag:              float            = 0.0,
     cfg_tag:                      str              = "",
 ) -> Signal | None:
     """Evaluasi sinyal untuk satu (symbol, trigger_tf). Returns Signal jika 5 gate lulus."""
@@ -163,8 +171,11 @@ def evaluate_any_tf_mta(
     last_sig_t = _LAST_SIGNAL_TIME.get(key)
     if last_sig_t is not None:
         tf_min = {"M1":1,"M5":5,"M15":15,"M30":30,"H1":60,"H4":240,"D1":1440}.get(trigger_tf, 5)
-        bars_since = (close_time_ts - last_sig_t).total_seconds() / (tf_min * 60)
-        if bars_since < base_cd:
+        # Normalisasi kedua timestamp ke tz-naive agar selisih konsisten
+        t1 = close_time_ts.tz_localize(None) if close_time_ts.tzinfo is not None else close_time_ts
+        t0 = last_sig_t.tz_localize(None) if last_sig_t.tzinfo is not None else last_sig_t
+        bars_since = (t1 - t0).total_seconds() / (tf_min * 60)
+        if 0 <= bars_since < base_cd:
             _reject(df_t, f"COOLDOWN({bars_since:.1f}bar)"); return None
 
     now_utc = close_time_ts.to_pydatetime().replace(tzinfo=pytz.utc) if close_time_ts.tzinfo is None else close_time_ts.to_pydatetime()
@@ -187,6 +198,38 @@ def evaluate_any_tf_mta(
     if session_filter and not is_active_session(now_utc, trigger_tf):
         _reject(df_t, f"OUT_OF_SESSION({sess})"); return None
 
+    # Economic news blackout gate (Cek ganda: waktu penutupan candle dan jam nyata dunia saat ini)
+    if news_filter_enabled:
+        tf_min_news = {"M1":1,"M5":5,"M15":15,"M30":30,"H1":60,"H4":240,"D1":1440}.get(trigger_tf, 5)
+        eval_news_time = now_utc + timedelta(minutes=tf_min_news)
+        real_now_utc = datetime.now(pytz.utc)
+
+        # Prioritaskan waktu nyata saat ini (live market), dengan fallback ke waktu candle
+        is_bo, news_info = is_news_blackout(
+            dt=real_now_utc,
+            buffer_before_min=news_buffer_before_min,
+            buffer_after_min=news_buffer_after_min,
+            currency=news_currency,
+            impact_levels=news_impact_levels,
+        )
+        if not is_bo:
+            is_bo, news_info = is_news_blackout(
+                dt=eval_news_time,
+                buffer_before_min=news_buffer_before_min,
+                buffer_after_min=news_buffer_after_min,
+                currency=news_currency,
+                impact_levels=news_impact_levels,
+            )
+
+        if is_bo and news_info:
+            ev_title = news_info.get("title", "News")
+            diff_m = news_info.get("diff_minutes", 0.0)
+            _reject(df_t, f"NEWS_BLACKOUT({ev_title}|diff={diff_m:+.0f}m)")
+            return None
+    # Broker feed freeze gate (kuotasi broker membeku / stale quotes)
+    if broker_feed_stale:
+        _reject(df_t, f"BROKER_FEED_STALE(lag={broker_feed_lag:.0f}s)")
+        return None
     # GATE 2
     confirm_tfs       = higher_timeframes(trigger_tf, enabled_tfs)
     bias, bias_detail = _vote_bias(

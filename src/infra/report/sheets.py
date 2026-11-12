@@ -3,6 +3,8 @@
 from datetime import datetime
 
 from openpyxl.chart import BarChart, LineChart, PieChart, Reference
+from openpyxl.chart.label import DataLabelList
+from openpyxl.chart.marker import Marker
 from openpyxl.chart.series import SeriesLabel
 from openpyxl.styles import Alignment, Font, PatternFill
 from openpyxl.utils import get_column_letter
@@ -321,26 +323,85 @@ def sheet_akurasi_komponen(wb, stats: dict) -> None:
     ws.merge_cells("A1:F1")
     set_cell(ws, 2, 1, "Akurasi = % sinyal WIN dari semua sinyal yang memakai komponen ini", italic=True)
     ws.merge_cells("A2:F2")
-    write_header_row(ws, 3, ["Komponen", "Layer", "Total", "WIN", "LOSS", "Akurasi (%)"])
-    for i, w in enumerate([18,12,12,8,8,14], 1):
-        ws.column_dimensions[get_column_letter(i)].width = w
+
     layer_map = {
         "EMA200":"Trigger","EMA50":"Trigger","RSI":"Trigger","MACD":"Trigger",
         "PATTERN":"Confluence","DIVERGENCE":"Confluence","FIBONACCI":"Confluence",
         "SNR":"Confluence","SND":"Confluence",
     }
+
+    if not comp:
+        set_cell(ws, 4, 1, "Belum ada data", italic=True)
+        return
+
+    # Tulis data tersembunyi untuk chart (kolom A=Komponen, B=Akurasi, C=Total, D=WIN, E=LOSS)
+    sorted_comp = sorted(comp.items(), key=lambda x: -x[1]["accuracy"])
+    write_header_row(ws, 3, ["Komponen", "Akurasi (%)", "Total", "WIN", "LOSS", "Layer"])
+    for i, w in enumerate([18, 14, 8, 8, 8, 12], 1):
+        ws.column_dimensions[get_column_letter(i)].width = w
+
     r = 4
-    if comp:
-        for name, v in sorted(comp.items(), key=lambda x: -x[1]["accuracy"]):
-            bg = C_WIN if v["accuracy"] >= 60 else (C_LOSS if v["total"] > 0 and v["accuracy"] < 40 else None)
-            for col, val in enumerate([name, layer_map.get(name,"-"), v["total"], v["win"], v["loss"], v["accuracy"]], 1):
-                set_cell(ws, r, col, val, bg=bg)
-            r += 1
-    else:
-        ws.merge_cells(f"A{r}:F{r}")
-        set_cell(ws, r, 1, "Belum ada data", italic=True); r += 1
+    for name, v in sorted_comp:
+        bg = C_WIN if v["accuracy"] >= 60 else (C_LOSS if v["total"] > 0 and v["accuracy"] < 40 else None)
+        for col, val in enumerate([name, v["accuracy"], v["total"], v["win"], v["loss"], layer_map.get(name, "-")], 1):
+            set_cell(ws, r, col, val, bg=bg)
+        r += 1
     auto_border(ws, 1, 1, r - 1, 6)
-    set_cell(ws, r + 1, 1, "* Hijau >= 60% | Merah < 40%", italic=True)
+
+    n_items = r - 4
+    if n_items > 0:
+        chart = BarChart()
+        chart.type = "col"
+        chart.grouping = "clustered"
+        chart.title = "Akurasi Per Komponen (%)"
+        chart.y_axis.title = "Akurasi (%)"
+        chart.y_axis.scaling.min = 0
+        chart.y_axis.scaling.max = 100
+        chart.y_axis.numFmt = '0"%"'
+        chart.x_axis.delete = False
+        chart.x_axis.tickLblPos = "low"
+        chart.style = 10
+        chart.width = 26
+        chart.height = 15
+
+        data_ref = Reference(ws, min_col=2, min_row=3, max_row=3 + n_items)
+        cats_ref = Reference(ws, min_col=1, min_row=4, max_row=3 + n_items)
+        chart.add_data(data_ref, titles_from_data=True)
+        chart.set_categories(cats_ref)
+
+        # Bar series: warna biru, label hanya angka persentase (tanpa teks)
+        bar_s = chart.series[0]
+        bar_s.graphicalProperties.solidFill = "1F4E79"
+        bar_s.graphicalProperties.line.solidFill = "1F4E79"
+        bar_s.dLbls = DataLabelList()
+        bar_s.dLbls.showVal = True
+        bar_s.dLbls.showCatName = False
+        bar_s.dLbls.showSerName = False
+        bar_s.dLbls.numFmt = '0.0"%"'
+
+        # Line chart overlay dengan dot marker
+        line = LineChart()
+        line.y_axis.scaling.min = 0
+        line.y_axis.scaling.max = 100
+        line.y_axis.delete = True
+        line_data = Reference(ws, min_col=2, min_row=3, max_row=3 + n_items)
+        line.add_data(line_data, titles_from_data=True)
+        line.set_categories(cats_ref)
+        line_s = line.series[0]
+        line_s.title = SeriesLabel(v="Tren Akurasi")
+        line_s.graphicalProperties.line.solidFill = "E74C3C"
+        line_s.graphicalProperties.line.width = 22000
+        line_s.smooth = True
+        line_s.marker = Marker(symbol="circle", size=7)
+        line_s.marker.graphicalProperties.solidFill = "E74C3C"
+        line_s.marker.graphicalProperties.line.solidFill = "C0392B"
+
+        chart.legend = None
+        chart += line
+
+        ws.add_chart(chart, "A" + str(r + 1))
+
+    set_cell(ws, r + 19, 1, "* Hijau >= 60% | Merah < 40%", italic=True)
 
 
 def sheet_equity_curve(wb, records: list[dict]) -> None:

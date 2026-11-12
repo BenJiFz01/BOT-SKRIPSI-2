@@ -35,17 +35,21 @@ _COOLDOWN_PATH = Path("logs/cooldown_state.json")
 
 
 def _load_cooldown_state() -> None:
-    """Baca cooldown_state.json ke _LAST_SIGNAL_TIME (timestamp tz-naive UTC)."""
+    """Baca cooldown_state.json ke _LAST_SIGNAL_TIME (timestamp tz-naive)."""
     if not _COOLDOWN_PATH.exists():
         return
     try:
         data = json.loads(_COOLDOWN_PATH.read_text(encoding="utf-8"))
+        now = pd.Timestamp.now()
         for key_str, ts_str in data.items():
             parts = key_str.split("|")
             if len(parts) == 2:
                 ts = pd.to_datetime(ts_str)
-                # Normalisasi ke tz-naive
-                if ts.tzinfo is not None:                    ts = ts.tz_convert("UTC").tz_localize(None)
+                if ts.tzinfo is not None:
+                    ts = ts.tz_convert("UTC").tz_localize(None)
+                # Abaikan timestamp lebih dari 24 jam — state terlalu lama
+                if (now - ts).total_seconds() > 86400:
+                    continue
                 _LAST_SIGNAL_TIME[(parts[0], parts[1])] = ts
     except Exception:
         pass
